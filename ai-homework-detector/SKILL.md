@@ -22,7 +22,7 @@ pip install -r <skill目录>/requirements.txt
 python <skill目录>/scripts/detect.py --download
 ```
 
-模型下载一次后（约 400MB×2，在 Hugging Face 缓存里），以后可以设置 `HF_HUB_OFFLINE=1` 完全离线运行。CPU 就能跑，不需要显卡。
+模型下载一次后（约 1.7GB，在 Hugging Face 缓存里），以后可以设置 `HF_HUB_OFFLINE=1` 完全离线运行。CPU 就能跑，不需要显卡。
 
 ## 检测步骤
 

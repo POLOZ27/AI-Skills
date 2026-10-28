@@ -15,7 +15,7 @@
 2. 工作空间 → 工具 → 新建，粘贴 `ai-homework-detector/openwebui/ai_homework_detector_tool.py`，保存。
 3. 工作空间 → Skills → 新建，粘贴 `ai-homework-detector/openwebui/SKILL.md`。
 4. 在要用的模型上勾选这个工具和 skill。
-5. 第一次调用时会把约 800MB 模型下载到 `/app/backend/data/cache/aigc_detector`（在数据卷里，容器重建不丢）。
+5. 第一次调用时会把约 1.7GB 模型下载到 `/app/backend/data/cache/aigc_detector`（在数据卷里，容器重建不丢）。
 
 ## 安装到 Claude Code
 
