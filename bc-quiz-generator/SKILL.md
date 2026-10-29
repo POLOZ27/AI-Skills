@@ -16,6 +16,9 @@ description: 按 BC 省（British Columbia）10–12 年级课程给老师出题
 ## 规则二：提问只用 `ask_user`，名字一字不差
 
 - 需要老师做选择时，调用 Open WebUI 自带的提问工具，工具名必须是 **`ask_user`**。不要写成 `ask_user_test`、`askUser`、`ask_user_question` 或别的名字，写错了系统认不出，老师会看到一堆原始代码。
+- 每个问题都**必须**有非空的 `id`，用简短英文：`course`、`unit`、`format`。没有 `id` 系统会拒绝（"Each question requires a non-empty id"），中文提问时也一样要写。
+- 每个问题包含 `id`、`header`、`question`、`options`；每个选项包含 `label` 和 `description`，2–4 个选项。
+- 单元选项只能从下面"BC 课程与单元"里这门课的单元中选，不要拿别的年级的内容凑（例如 Quadratic 二次函数是 11 年级，不能出现在 10 年级的选项里）。
 - 如果 `ask_user` 不可用，或者调用失败，就改用普通文字列出编号选项（格式见下面"选项菜单"），不要输出其他任何工具调用。
 
 ## 规则三：信息不够时，先问一次
