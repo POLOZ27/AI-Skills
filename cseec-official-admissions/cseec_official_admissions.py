@@ -2,7 +2,7 @@
 title: CSEEC Official Admissions
 description: Read live public admissions evidence from allowlisted official university sites (Canada, Hong Kong, Singapore) without transmitting student data.
 author: CSEEC
-version: 0.3.0
+version: 0.4.0
 license: MIT
 """
 
@@ -220,6 +220,9 @@ ROBOTS_TTL = 24 * 3600
 RESULT_TTL = 24 * 3600
 CACHE_DIR = "/app/backend/data/cache/cseec_admissions"
 BATCH_LIMIT = 6
+# Tool output is re-read by the model on every later round, so keep what it returns short.
+EXCERPT_RETURN_LIMIT = 1500
+DOCUMENTS_RETURN_LIMIT = 3
 # One lock per host: different universities are read in parallel, one site is never hit concurrently.
 _HOST_LOCKS = {}
 _HOST_LOCKS_GUARD = threading.Lock()
@@ -592,6 +595,33 @@ def collect(institution, topic, program, entry_year):
     return result
 
 
+def compact(result, keep_limitations=True):
+    """Trim a collect() result to what the model needs: short excerpts, no link lists."""
+    if not isinstance(result, dict) or "sources" not in result:
+        return result
+    result = dict(result)
+    if not keep_limitations:
+        result.pop("limitations", None)
+        if result.get("institution") in SCOPE_NOTES:
+            result["scope_note"] = SCOPE_NOTES[result["institution"]]
+    sources = []
+    for source in result["sources"]:
+        source = dict(source)
+        excerpt = source.get("excerpt", "")
+        if len(excerpt) > EXCERPT_RETURN_LIMIT:
+            source["excerpt"] = excerpt[:EXCERPT_RETURN_LIMIT]
+            source["excerpt_truncated"] = True
+        source.pop("discovered_links", None)
+        documents = source.pop("unread_official_documents", [])
+        if documents:
+            source["unread_official_pdfs"] = [
+                {"url": d["url"], "title": d["title"]} for d in documents[:DOCUMENTS_RETURN_LIMIT]
+            ]
+        sources.append(source)
+    result["sources"] = sources
+    return result
+
+
 def collect_unofficial(institution, topic):
     pages = UNOFFICIAL.get(institution, {}).get(topic)
     if not pages:
@@ -657,9 +687,9 @@ class Tools:
         :param entry_year: Target entry year, not an assertion about source validity.
         """
         try:
-            data = await asyncio.to_thread(
+            data = compact(await asyncio.to_thread(
                 collect, institution, topic, program, entry_year
-            )
+            ))
         except (ValueError, TypeError):
             data = {
                 "status": "invalid_public_identifier",
@@ -696,7 +726,12 @@ class Tools:
                 return {"status": "invalid_public_identifier", "institution": institution}
 
         results = await asyncio.gather(*(one(i) for i in chosen))
-        data = {"results": results}
+        limitations = next(
+            (r["limitations"] for r in results if isinstance(r, dict) and "limitations" in r), None
+        )
+        data = {"results": [compact(r, keep_limitations=False) for r in results]}
+        if limitations:
+            data["limitations"] = limitations
         if len(institutions) > len(chosen):
             data["skipped"] = institutions[len(chosen):]
             data["note"] = f"At most {BATCH_LIMIT} universities per call."
