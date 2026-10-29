@@ -6,14 +6,14 @@
 
 老师问"給我出一套10年級數學第一單元的單元測試題"时，旧的出题模块：
 
-1. 让 Qwen 输出了一段 `<tool_call><function=ask_user_test>…` 想弹出选项，但 Open WebUI 没识别，原始代码直接显示给老师。
+1. Qwen 想调用 Open WebUI 自带的 `ask_user` 弹出选项，但把工具名写成了 `ask_user_test`，系统认不出，原始代码直接显示给老师。
 2. 列出的课程名是编的（BC 没有 "Pre-Calculus 10"、"Mathematics 10"）。
 3. 没有中英双语解析。
 
 新的 skill：
 
 - 问中文回中文、问英文回英文（繁简也跟着老师）。
-- 信息不够时，用**普通文字**的编号菜单让老师选课程、单元、试卷语言、难度、教材，回一行编号就行，回"默认"直接出题；明确禁止输出工具调用。
+- 信息不够时用 `ask_user`（名字一字不差）问课程、单元、试卷语言，最多 3 题、双语选项；工具不可用时退回纯文字编号菜单。回"默认"直接出题。
 - 每道题附答案、中文解析、英文 Explanation、术语中英对照。
 - 课程和单元来自 BC 官方课程大纲。
 
@@ -29,17 +29,15 @@
 ## 安装到 .75
 
 1. 备份 `/home/polo/school-ai/data/openwebui/webui.db`。
+   - 2026-10-29 已在 "CSEEC AI Tool" 的系统提示词末尾加了一段语言/提问规则（备份 `webui.db.bak-20261029-000039-promptlang`）。安装前先读当前系统提示词，和本 skill 合并，不要覆盖；模型上已挂的 AI 作业检测工具保留。
 2. Workspace → Skills：新建（或替换旧的出题 skill）`bc-quiz-generator`，粘贴 `SKILL.md` 全文。旧的出题 skill 先停用，避免两个同时触发。
 3. Workspace → Knowledge：新建知识库 "BC 10-12 课程大纲"，上传 `knowledge/` 下三个文件。
 4. Workspace → Models → CSEEC AI Tool：把该知识库和 skill 关联到模型。
 5. 测试：用中文、繁体、英文各问一次"出一套 10 年级数学第一单元测试题"，确认不再出现 `<tool_call>`，菜单课程名正确，解析是双语。
 
-### 如果别的场景仍然出现 `<tool_call>` 原文
+### 如果仍然出现 `<tool_call>` 原文
 
-这是模型输出了 Qwen 格式的工具调用但没被解析。可以检查：
-
-- Models → CSEEC AI Tool → Advanced Params → Function Calling：改成 `Default` 试试（`Native` 依赖推理服务把 Qwen 的工具调用解析出来）。
-- 推理服务（strata 容器）是否开启了与该 Qwen 模型匹配的 tool-call parser。
+先看工具名是不是写错了（这次就是 `ask_user_test`）。名字对了还出现，再检查 Models → CSEEC AI Tool → Advanced Params → Function Calling 设置和推理服务（strata）的 tool-call parser。
 
 ## 题库来源与版权
 
