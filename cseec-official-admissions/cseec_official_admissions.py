@@ -2,7 +2,7 @@
 title: CSEEC Official Admissions
 description: Read live public admissions evidence from allowlisted official university sites (Canada, Hong Kong, Singapore) without transmitting student data.
 author: CSEEC
-version: 0.2.0
+version: 0.3.0
 license: MIT
 """
 
@@ -12,6 +12,7 @@ import html
 from html.parser import HTMLParser
 import ipaddress
 import json
+import os
 import re
 import socket
 import ssl
@@ -28,7 +29,7 @@ from urllib.request import (
 )
 from urllib.robotparser import RobotFileParser
 
-USER_AGENT = "CSEEC-Admissions-Reader/0.2 (+https://www.cseec.ca)"
+USER_AGENT = "CSEEC-Admissions-Reader/0.3 (+https://www.cseec.ca)"
 # Also obey robots.txt rules aimed at user-triggered AI fetchers, since this tool is one.
 ROBOT_AGENTS = (USER_AGENT, "ChatGPT-User", "Claude-User", "Claude-Web")
 # Official Sectigo intermediate (from crt.sectigo.com) that admission.cuhk.edu.hk omits from its chain.
@@ -212,7 +213,54 @@ PROGRAM_WORDS = {
     "arts": ("arts", "humanities", "social-science"),
 }
 LIMIT = 6 * 1024 * 1024
-_LOCK = threading.Lock()
+ROBOTS_TIMEOUT = 5
+PAGE_TIMEOUT = 8
+ROBOTS_TTL = 24 * 3600
+# Official admissions pages change a few times a year; reuse a successful read for a day.
+RESULT_TTL = 24 * 3600
+CACHE_DIR = "/app/backend/data/cache/cseec_admissions"
+BATCH_LIMIT = 6
+# One lock per host: different universities are read in parallel, one site is never hit concurrently.
+_HOST_LOCKS = {}
+_HOST_LOCKS_GUARD = threading.Lock()
+_RESULTS = {}
+
+
+def host_lock(hostname):
+    with _HOST_LOCKS_GUARD:
+        return _HOST_LOCKS.setdefault(hostname, threading.Lock())
+
+
+def cache_path(key):
+    return os.path.join(CACHE_DIR, key.replace(":", "__") + ".json")
+
+
+def cached_result(key):
+    """Return (stored_at, result) from memory or disk if younger than RESULT_TTL."""
+    entry = _RESULTS.get(key)
+    if not entry:
+        try:
+            with open(cache_path(key), encoding="utf-8") as handle:
+                entry = tuple(json.load(handle))
+            _RESULTS[key] = entry
+        except (OSError, ValueError, TypeError):
+            return None
+    if time.time() - entry[0] > RESULT_TTL:
+        return None
+    return entry
+
+
+def store_result(key, result):
+    entry = (time.time(), result)
+    _RESULTS[key] = entry
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        temporary = cache_path(key) + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(entry, handle, ensure_ascii=False)
+        os.replace(temporary, cache_path(key))
+    except OSError:
+        pass
 
 
 def validate_url(url, institution, resolve=True):
@@ -314,16 +362,16 @@ class Page(HTMLParser):
 
 
 def robots_allowed(url):
-    """Honour the site's robots.txt for this tool and for user-triggered AI fetchers (cached 10 minutes)."""
+    """Honour the site's robots.txt for this tool and for user-triggered AI fetchers (cached 24 hours)."""
     parts = urlsplit(url)
     cached = _ROBOTS.get(parts.hostname)
-    if not cached or time.time() - cached[0] > 600:
+    if not cached or time.time() - cached[0] > ROBOTS_TTL:
         parser = RobotFileParser()
         try:
             opener = build_opener(ProxyHandler({}), HTTPSHandler(context=TLS))
             with opener.open(
                 Request(f"https://{parts.hostname}/robots.txt", headers={"User-Agent": USER_AGENT}),
-                timeout=8,
+                timeout=ROBOTS_TIMEOUT,
             ) as response:
                 parser.parse(response.read(512 * 1024).decode("utf-8", errors="replace").splitlines())
         except Exception as error:
@@ -337,6 +385,16 @@ def robots_allowed(url):
 
 
 def fetch_page(url, institution):
+    lock = host_lock(urlsplit(url).hostname)
+    if not lock.acquire(timeout=30):
+        raise TimeoutError("Another read of this site is still running")
+    try:
+        return read_page(url, institution)
+    finally:
+        lock.release()
+
+
+def read_page(url, institution):
     validate_url(url, institution)
     if not robots_allowed(url):
         raise PermissionError("robots.txt disallows automated reading")
@@ -351,7 +409,7 @@ def fetch_page(url, institution):
             "Accept-Encoding": "identity",
         },
     )
-    with opener.open(request, timeout=12) as response:
+    with opener.open(request, timeout=PAGE_TIMEOUT) as response:
         validate_url(response.url, institution)
         mime = response.headers.get_content_type()
         if mime != "text/html":
@@ -424,109 +482,114 @@ def collect(institution, topic, program, entry_year):
             "available_topics": list(SOURCES[institution]),
             "instruction": "官网未查到，需人工核实。No official page for this topic is configured; do not state numbers for it.",
         }
-    if not _LOCK.acquire(timeout=60):
-        return {
-            "status": "busy",
-            "message": "One retrieval already active; retry later",
+    key = f"{institution}:{topic}:{program}"
+    hit = cached_result(key)
+    if hit:
+        result = dict(hit[1])
+        result["requested_entry_year"] = entry_year
+        result["cached_read"] = {
+            "read_minutes_ago": int((time.time() - hit[0]) / 60),
+            "note": "Reused an official-page read from the last 24 hours; retrieved_at_utc shows when each page was read.",
         }
-    try:
-        result = {
-            "status": "partial_evidence",
-            "institution": institution,
-            "topic": topic,
-            "program_direction": program,
-            "requested_entry_year": entry_year,
-            "entry_year_verified": False,
-            "sources": [],
-            "failures": [],
-            "limitations": [
-                "Evidence excerpts, not verified eligibility or complete requirements.",
-                "Requirement pages target Canadian/BC applicants where available; offshore BC Dogwood eligibility still needs counsellor confirmation.",
-                "Observed years are not verified applicable admission cycles.",
-                "No student data accepted; no external AI or paid search API used.",
-            ] + ([SCOPE_NOTES[institution]] if institution in SCOPE_NOTES else []),
-        }
-        pending = [SOURCES[institution][topic]]
-        for index in range(3):
-            if index >= len(pending):
-                break
-            url = pending[index]
-            try:
-                page, final_url = fetch_page(url, institution)
-                text = page.visible_text()
-                evidence, truncated = excerpts(text, PROGRAM_WORDS[program])
-                if len(text) < 100:
-                    raise ValueError(
-                        "Insufficient readable content; manual verification required"
-                    )
-                links = []
-                documents = []
-                for href, label in page.links:
-                    candidate = urljoin(final_url, href.strip())
-                    parts = urlsplit(candidate)
-                    candidate = urlunsplit(parts._replace(fragment=""))
-                    try:
-                        validate_url(candidate, institution, resolve=False)
-                    except ValueError:
-                        continue
-                    if parts.path.lower().endswith(".pdf"):
-                        if candidate not in {v["url"] for v in documents}:
-                            documents.append(
-                                {
-                                    "url": candidate,
-                                    "title": " ".join(label.split())[:160],
-                                    "content_verified": False,
-                                    "status": "PDF_reader_required",
-                                }
-                            )
-                    elif candidate not in {v["url"] for v in links}:
-                        links.append(
-                            {"url": candidate, "title": " ".join(label.split())[:160]}
-                        )
-                result["sources"].append(
-                    {
-                        "url": final_url,
-                        "title": "".join(page.title).strip(),
-                        "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
-                        "source_year_mentions": sorted(
-                            set(re.findall(r"\b20\d{2}\b", text))
-                        ),
-                        "applicable_entry_year": None,
-                        "requires_counsellor_verification": True,
-                        "excerpt": evidence,
-                        "excerpt_truncated": truncated,
-                        "discovered_links": links[:15],
-                        "unread_official_documents": documents[:10],
-                    }
-                )
-                if index == 0 and program != "general":
-                    ranked = [
-                        link
-                        for link in links
-                        if any(
-                            word in (link["title"] + " " + link["url"]).lower()
-                            for word in PROGRAM_WORDS[program]
-                        )
-                    ]
-                    pending.extend(
-                        link["url"] for link in ranked if link["url"] not in pending
-                    )
-                    pending = pending[:3]
-            except Exception as error:
-                # Return exception type only: do not include request or confidential runtime state.
-                result["failures"].append(
-                    {
-                        "url": url,
-                        "reason": type(error).__name__,
-                        "status": "manual_verification_required",
-                    }
-                )
-        if not result["sources"]:
-            result["status"] = "fetch_failed"
-            result["instruction"] = "官网未查到，需人工核实。The official page could not be fetched now; do not state numbers."
         return result
-    finally:
-        _LOCK.release()
+    result = {
+        "status": "partial_evidence",
+        "institution": institution,
+        "topic": topic,
+        "program_direction": program,
+        "requested_entry_year": entry_year,
+        "entry_year_verified": False,
+        "sources": [],
+        "failures": [],
+        "limitations": [
+            "Evidence excerpts, not verified eligibility or complete requirements.",
+            "Requirement pages target Canadian/BC applicants where available; offshore BC Dogwood eligibility still needs counsellor confirmation.",
+            "Observed years are not verified applicable admission cycles.",
+            "No student data accepted; no external AI or paid search API used.",
+        ] + ([SCOPE_NOTES[institution]] if institution in SCOPE_NOTES else []),
+    }
+    pending = [SOURCES[institution][topic]]
+    for index in range(3):
+        if index >= len(pending):
+            break
+        url = pending[index]
+        try:
+            page, final_url = fetch_page(url, institution)
+            text = page.visible_text()
+            evidence, truncated = excerpts(text, PROGRAM_WORDS[program])
+            if len(text) < 100:
+                raise ValueError(
+                    "Insufficient readable content; manual verification required"
+                )
+            links = []
+            documents = []
+            for href, label in page.links:
+                candidate = urljoin(final_url, href.strip())
+                parts = urlsplit(candidate)
+                candidate = urlunsplit(parts._replace(fragment=""))
+                try:
+                    validate_url(candidate, institution, resolve=False)
+                except ValueError:
+                    continue
+                if parts.path.lower().endswith(".pdf"):
+                    if candidate not in {v["url"] for v in documents}:
+                        documents.append(
+                            {
+                                "url": candidate,
+                                "title": " ".join(label.split())[:160],
+                                "content_verified": False,
+                                "status": "PDF_reader_required",
+                            }
+                        )
+                elif candidate not in {v["url"] for v in links}:
+                    links.append(
+                        {"url": candidate, "title": " ".join(label.split())[:160]}
+                    )
+            result["sources"].append(
+                {
+                    "url": final_url,
+                    "title": "".join(page.title).strip(),
+                    "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "source_year_mentions": sorted(
+                        set(re.findall(r"\b20\d{2}\b", text))
+                    ),
+                    "applicable_entry_year": None,
+                    "requires_counsellor_verification": True,
+                    "excerpt": evidence,
+                    "excerpt_truncated": truncated,
+                    "discovered_links": links[:15],
+                    "unread_official_documents": documents[:10],
+                }
+            )
+            if index == 0 and program != "general":
+                ranked = [
+                    link
+                    for link in links
+                    if any(
+                        word in (link["title"] + " " + link["url"]).lower()
+                        for word in PROGRAM_WORDS[program]
+                    )
+                ]
+                pending.extend(
+                    link["url"] for link in ranked if link["url"] not in pending
+                )
+                pending = pending[:3]
+        except Exception as error:
+            # Return exception type only: do not include request or confidential runtime state.
+            result["failures"].append(
+                {
+                    "url": url,
+                    "reason": type(error).__name__,
+                    "status": "manual_verification_required",
+                }
+            )
+    if not result["sources"]:
+        result["status"] = "fetch_failed"
+        result["instruction"] = "官网未查到，需人工核实。The official page could not be fetched now; do not state numbers."
+    elif not result["failures"]:
+        # Only complete reads are reused; partial or failed reads are retried next time.
+        store_result(key, result)
+    return result
 
 
 def collect_unofficial(institution, topic):
@@ -572,7 +635,7 @@ class Tools:
                 "not_readable": {k: v[1] for k, v in UNSUPPORTED.items()},
                 "unofficial_sources": {k: list(v) for k, v in UNOFFICIAL.items()},
                 "program_directions": list(PROGRAM_WORDS),
-                "scope": "Live official HTML pages only (fetched on every call); not PDFs or universities outside this list.",
+                "scope": "Official HTML pages only (live read, reused for up to 24 hours); not PDFs or universities outside this list.",
             },
             ensure_ascii=False,
         )
@@ -602,6 +665,41 @@ class Tools:
                 "status": "invalid_public_identifier",
                 "message": "Use supported IDs and integer year only",
             }
+        return json.dumps(data, ensure_ascii=False)
+
+    async def get_official_admissions_batch(
+        self,
+        institutions: list[INSTITUTIONS],
+        topic: Literal["requirements", "language", "deadlines", "history"],
+        program: Literal[
+            "general", "engineering", "computing", "business", "science", "arts"
+        ],
+        entry_year: int,
+    ) -> str:
+        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. Public IDs only; never student data.
+
+        :param institutions: University IDs, e.g. ["ubc", "sfu", "uwaterloo"]; no URLs or student details.
+        :param topic: Evidence type; use history for past admissions data.
+        :param program: Public program direction for bounded official link discovery.
+        :param entry_year: Target entry year, not an assertion about source validity.
+        """
+        if not isinstance(institutions, list) or not institutions:
+            return json.dumps({"status": "invalid_public_identifier"}, ensure_ascii=False)
+        chosen = list(dict.fromkeys(institutions))[:BATCH_LIMIT]
+
+        async def one(institution):
+            try:
+                return await asyncio.to_thread(
+                    collect, institution, topic, program, entry_year
+                )
+            except (ValueError, TypeError, KeyError):
+                return {"status": "invalid_public_identifier", "institution": institution}
+
+        results = await asyncio.gather(*(one(i) for i in chosen))
+        data = {"results": results}
+        if len(institutions) > len(chosen):
+            data["skipped"] = institutions[len(chosen):]
+            data["note"] = f"At most {BATCH_LIMIT} universities per call."
         return json.dumps(data, ensure_ascii=False)
 
     async def get_unofficial_admissions(
