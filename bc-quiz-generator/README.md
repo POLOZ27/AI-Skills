@@ -31,8 +31,8 @@
 1. 备份 `/home/polo/school-ai/data/openwebui/webui.db`。
    - 2026-10-29 已在 "CSEEC AI Tool" 的系统提示词末尾加了一段语言/提问规则（备份 `webui.db.bak-20261029-000039-promptlang`）。安装前先读当前系统提示词，和本 skill 合并，不要覆盖；模型上已挂的 AI 作业检测工具保留。
 2. Workspace → Skills：新建（或替换旧的出题 skill）`bc-quiz-generator`，粘贴 `SKILL.md` 全文。旧的出题 skill 先停用，避免两个同时触发。
-3. Workspace → Knowledge：新建知识库 "BC 10-12 课程大纲"，上传 `knowledge/` 下三个文件。
-4. Workspace → Models → CSEEC AI Tool：把该知识库和 skill 关联到模型。
+3. 把 `knowledge/` 下三个文件作为附件加到 skill 里（.75 上 2026-10-29 就是这样装的，不单独建知识库）。
+4. Workspace → Models → CSEEC AI Tool：勾上该 skill，并在系统提示词末尾加"出题模块优先"一段（出卷时先用 view_skill 读 bc-quiz-generator；教师文件助手只管读文件和导出 Word/Forms）。
 5. 测试：用中文、繁体、英文各问一次"出一套 10 年级数学第一单元测试题"，确认不再出现 `<tool_call>`，菜单课程名正确，解析是双语。
 
 ### 如果仍然出现 `<tool_call>` 原文

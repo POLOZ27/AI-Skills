@@ -87,7 +87,7 @@ description: 按 BC 省（British Columbia）10–12 年级课程给老师出题
 
 ## 知识库
 
-如果对话里附有"BC 10-12 课程大纲"知识库，优先用知识库里的内容和术语。老师上传了教材目录或校本资料时，以老师的资料为准。
+本 skill 附带三个课程大纲文件：knowledge/bc-math-10-12.md（数学）、knowledge/bc-science-10-12.md（理科）、knowledge/bc-english-social-10-12.md（英语、社会）。出题前先读对应学科的文件，优先用里面的内容范围和中英术语。老师上传了教材目录或校本资料时，以老师的资料为准。
 
 ## BC 课程与单元（建议顺序）
 
