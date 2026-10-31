@@ -3,13 +3,14 @@
 完整的系统提示词保存在服务器的 webui.db 里，每次改动前都做了备份（`webui.db.bak-20261029-*`）。这里记录的是设置本身，以及 2026-10-29 新追加的提示词段落，方便重新部署时照着恢复。
 
 ## 共用
+- 2026-10-31：自动生成标题关闭（标签、追问建议、自动补全本来就是关的），新对话不再额外占用 strata 的处理位置。
 - 基础模型 `qwen3.8-flash-next-unsloth-ud-iq4_xs`（strata）：在界面上隐藏；CSEEC Teachers、JA Teachers、Service: ja-mail 三个组可读。v0.12.4 会检查老师对基础模型有没有权限，没有授权的话，所有非管理员都会被拒绝（"Model not found"）。
 - strata 启动参数：`conversation-cache-mib=8192`、`conversation-cache-slots=12`、`conversation-cache-min-tokens=4096`（见 /home/jaadmin/strata/run.sh）。
 
 ## CSEEC AI Tool（id `Qwen3.6-35B-A3B-MXFP4_MOE.gguf`）
 - 授权：CSEEC Teachers 可读
 - params：`function_calling: native`，`custom_params: {"reasoning_budget_tokens": 1024}`
-- capabilities：file_context、vision、file_upload、citations、status_updates、builtin_tools 打开；web_search、image_generation、code_interpreter、terminal、memory 关闭
+- capabilities：vision、file_upload、citations、status_updates、builtin_tools 打开；file_context 自 2026-10-31 **关闭**（上传文件改由 view_file 读一次，追问时缓存接得上）；web_search、image_generation、code_interpreter、terminal、memory 关闭
 - builtinTools：只开 time、knowledge、skills、files、user_input
 - 工具：cseec_assessment_export、ai_homework_detector、cseec_source_texts（2026-10-31 新增，见 cseec-source-texts/README.md）
 - 2026-10-30 在提示词末尾追加"## 原文规则"，2026-10-31 随读原文工具更新为新版本（全文见 cseec-source-texts/README.md）。
@@ -19,6 +20,7 @@
 - 2026-10-29 在提示词末尾追加：
   ```
   【效率规则】调用工具之间不要写过程说明或计划（例如 "Let me…"、"我先…"），直接调用工具；全部完成后只输出一次正式回答。同一个工具相同参数不要重复调用。
+  - 老师上传了文件时，第一轮就用 view_file 完整读一次，之后的追问不要重复读取；检测作业或按课文出题时，以读到的原文为准。（2026-10-31 追加）
   - 老师要下载 / 导出刚出好的测验时，直接调用 export_last_answer，不要把测验重新写成 JSON。只有老师要求修改题目后再导出、或上一条回答不是完整测验时，才用 create_assessment_files。
   ```
   "出题前确认"一条已改成：有科目和主题就直接按默认值出题，并写"按 X 年级出题，如需调整请告诉我"（与 bc-quiz-generator 的规则三一致，见 PR #2）。
