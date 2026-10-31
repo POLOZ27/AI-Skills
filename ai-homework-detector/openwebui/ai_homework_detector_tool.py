@@ -1,7 +1,7 @@
 """
 title: AI Homework Detector
 description: 本地检测作业文本是否可能由 AI 生成（中英文），使用开源 AIGC_text_detector 模型，结果仅供参考
-version: 0.1.0
+version: 0.2.0
 license: Apache-2.0
 requirements: transformers, torch
 """
@@ -64,8 +64,8 @@ class Tools:
             "/app/backend/data/cache/aigc_detector",
             description="模型缓存目录，放在数据卷里，容器重建后不会丢",
         )
-        high_threshold: float = Field(0.85, description="高于此值为'高'")
-        medium_threshold: float = Field(0.60, description="高于此值为'中'")
+        high_threshold: float = Field(0.95, description="高于此值为'高'（2026-10-31 校准：英文真人作文约 0.7% 落在此等级）")
+        medium_threshold: float = Field(0.80, description="高于此值为'中'（2026-10-31 校准：英文真人作文约 1.6% 达到中或以上）")
         min_chars_zh: int = Field(150, description="中文少于此字数时提示不可靠")
         min_words_en: int = Field(80, description="英文少于此词数时提示不可靠")
         cpu_threads: int = Field(8, description="推理使用的 CPU 线程数")
@@ -94,6 +94,16 @@ class Tools:
         if p >= self.valves.medium_threshold:
             return "中"
         return "低"
+
+    def _false_positive_note(self, level, lang):
+        """Calibrated 2026-10-31 on 1,000 pre-ChatGPT English student essays (PERSUADE 2.0) at thresholds 0.95 / 0.80."""
+        if lang != "en":
+            return "误判率参考：中文检测尚未用真实学生作文校准，误判率未知，请格外谨慎。"
+        if level == "高":
+            return "误判率参考：在 1,000 篇 ChatGPT 出现前的真实中学生英文作文测试中，约 0.7% 的真人作文（约每 150 篇 1 篇）会落在『高』。"
+        if level == "中":
+            return "误判率参考：同一测试中，约 1.6% 的真人作文会达到『中』或以上。"
+        return "误判率参考：『低』不代表一定是学生自己写的，改写过的 AI 文本也可能得低分。"
 
     def _too_short(self, text, lang):
         if lang == "zh":
@@ -142,7 +152,12 @@ class Tools:
         if __event_emitter__:
             await __event_emitter__({"type": "status", "data": {"description": "检测完成", "done": True}})
 
-        lines = [f"整体 AI 生成可能性：{overall:.0%}（{self._level(overall)}），语言：{lang}"]
+        level = self._level(overall)
+        lines = [
+            f"检测模型分数：{overall:.0%}（等级：{level}），语言：{lang}",
+            self._false_positive_note(level, lang),
+            "提示：分数高的往往是写得规范、篇幅较短的议论文；文本只有一段时，一个分数就决定整篇。",
+        ]
         if self._too_short(text, lang):
             lines.append("注意：文本过短，分数参考价值很低。")
         lines += ["", "| 段 | AI 可能性 | 等级 | 开头 |", "|---|---|---|---|"]
