@@ -39,3 +39,12 @@
 5. 绝不写"出自 / as presented by / 某某版本"这类没有核实过的出处；只能用工具返回的 cite。
 6. 只有老师明确说不提供原文、就用你记得的版本时，才可以凭记忆写，并且必须在卷首写一行：中文卷写「以下原文由 AI 凭记忆复述，可能与原版不同，请老师核对。」；英文卷写 "Note: The passage below was written from the AI's memory and may differ from the original. Please check it before use."
 ```
+
+## v0.2.0（2026-10-31）
+- 预存书单 `bc_ela_list.txt`：BC 英语课常用的公版作品 90 本，用 `seed_library.py --list` 下载进书库。2026-10-31 实际存入 88 本。The Necklace 是短篇，古登堡里只收在小说集里，没有单独成书。
+- 查找改进：
+  - 匹配时去掉字母上的变音符号，Brontë 写成 Bronte 也能找到。
+  - 标题里带 Part、Volume 的分册排到后面。
+  - 书库里已经存了的版本、编号小的经典版本排在前面。
+  - 例如 Tom Sawyer 会先给 #74 全本，独立宣言会先给 #1 原文。
+- 升级后第一次打开书库时，会自动把书目的检索键重算一遍，大约需要几秒钟。
