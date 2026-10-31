@@ -2,7 +2,7 @@
 title: CSEEC Source Texts
 description: Look up the original wording of public-domain texts (Library of Congress Aesop fables, Project Gutenberg books) from the school's local library, reading the official site only when the library does not have it yet.
 author: CSEEC
-version: 0.2.0
+version: 0.2.1
 license: MIT
 """
 
@@ -346,13 +346,17 @@ def search_catalog(db, title, author, source):
             r"\b(part|volume|vol|book|chapter)\b", wanted
         )
         number = int(row[0].partition(":")[2]) if row[1] == "gutenberg" else 0
+        # Adaptations list the original author second; the teacher's author should be the first one.
+        first_author = normalize((row[3] or "").split(";")[0])
         return (
+            bool(author_words) and not all(w in first_author for w in author_words),
+            # Books already in the library were chosen and checked by hand.
+            row[0] not in stored,
             name != wanted,
             not name.startswith(wanted),
             partial,
             row[1] != "loc_aesop",
             row[4] not in ("en", ""),
-            row[0] not in stored,
             number,
             len(name),
         )
