@@ -2,7 +2,7 @@
 title: CSEEC Source Texts
 description: Look up the original wording of public-domain texts (Library of Congress Aesop fables, Project Gutenberg books) from the school's local library, reading the official site only when the library does not have it yet.
 author: CSEEC
-version: 0.1.0
+version: 0.1.1
 license: MIT
 """
 
@@ -504,6 +504,34 @@ def seed(aesop=True, gutenberg_catalog=True, delay=1.0):
             report["loc_aesop"] = {"fables": len(ids), "stored": stored, "failed": failed}
         if gutenberg_catalog:
             report["gutenberg_catalog_titles"] = load_gutenberg_catalog(db)
+    finally:
+        db.close()
+    return report
+
+
+def prefetch_list(path, delay=2.0):
+    """Download each "title | author" line from Project Gutenberg into the library once."""
+    db = connect()
+    report = {"stored": [], "already": [], "not_found": [], "failed": []}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = [l.strip() for l in handle if l.strip() and not l.startswith("#")]
+        for line in lines:
+            title, _, author = (part.strip() for part in line.partition("|"))
+            matches = [row for row in search_catalog(db, title, author, "gutenberg") if row[4] in ("en", "")]
+            if not matches:
+                report["not_found"].append(line)
+                continue
+            text_id = matches[0][0]
+            if stored_text(db, text_id):
+                report["already"].append(text_id)
+                continue
+            try:
+                get_text(db, text_id)
+                report["stored"].append(f"{text_id} {matches[0][2]}")
+            except Exception as error:
+                report["failed"].append(f"{text_id} {type(error).__name__}")
+            time.sleep(delay)
     finally:
         db.close()
     return report

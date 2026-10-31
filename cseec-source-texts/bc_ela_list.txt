@@ -1,0 +1,90 @@
+# BC 英语课常用的公版作品（标题 | 作者关键词）。seed_library.py --list 会在古登堡书目里找到并下载。
+# 只收在加拿大和美国都已进入公版的作品。
+Romeo and Juliet | Shakespeare
+Macbeth | Shakespeare
+Hamlet | Shakespeare
+Julius Caesar | Shakespeare
+A Midsummer Night's Dream | Shakespeare
+Othello | Shakespeare
+King Lear | Shakespeare
+The Tempest | Shakespeare
+Twelfth Night | Shakespeare
+The Merchant of Venice | Shakespeare
+Much Ado About Nothing | Shakespeare
+Shakespeare's Sonnets | Shakespeare
+Pride and Prejudice | Austen
+Sense and Sensibility | Austen
+Emma | Austen
+Frankenstein | Shelley, Mary
+The Strange Case of Dr. Jekyll and Mr. Hyde | Stevenson
+Treasure Island | Stevenson
+The Great Gatsby | Fitzgerald
+Great Expectations | Dickens
+A Christmas Carol | Dickens
+A Tale of Two Cities | Dickens
+Oliver Twist | Dickens
+Jane Eyre | Bronte
+Wuthering Heights | Bronte
+The Picture of Dorian Gray | Wilde
+The Importance of Being Earnest | Wilde
+Heart of Darkness | Conrad
+The Call of the Wild | London
+White Fang | London
+The Adventures of Tom Sawyer | Twain
+Adventures of Huckleberry Finn | Twain
+Anne of Green Gables | Montgomery
+Alice's Adventures in Wonderland | Carroll
+The Scarlet Letter | Hawthorne
+Little Women | Alcott
+Dracula | Stoker
+The Time Machine | Wells
+The War of the Worlds | Wells
+The Invisible Man | Wells
+Around the World in Eighty Days | Verne
+The Hound of the Baskervilles | Doyle
+The Adventures of Sherlock Holmes | Doyle
+Gulliver's Travels | Swift
+Robinson Crusoe | Defoe
+Moby Dick | Melville
+Peter Pan | Barrie
+The Secret Garden | Burnett
+Black Beauty | Sewell
+The Wind in the Willows | Grahame
+The Jungle Book | Kipling
+Metamorphosis | Kafka
+A Doll's House | Ibsen
+Pygmalion | Shaw
+The Odyssey | Homer
+The Iliad | Homer
+Beowulf |
+The Canterbury Tales | Chaucer
+Narrative of the Life of Frederick Douglass | Douglass
+Up From Slavery | Washington
+The Souls of Black Folk | Du Bois
+Uncle Tom's Cabin | Stowe
+The Red Badge of Courage | Crane
+The Awakening | Chopin
+Ethan Frome | Wharton
+The Yellow Wallpaper | Gilman
+The Works of Edgar Allan Poe | Poe
+The Four Million | Henry, O.
+Lost Face | London
+Beasts and Super-Beasts | Saki
+The Lady of the Barge | Jacobs
+The Lady with the Dog and Other Stories | Chekhov
+The Necklace | Maupassant
+Leaves of Grass | Whitman
+A Boy's Will | Frost
+North of Boston | Frost
+Mountain Interval | Frost
+Poems by Emily Dickinson | Dickinson
+Songs of Innocence and of Experience | Blake
+Lyrical Ballads | Wordsworth
+In Flanders Fields and Other Poems | McCrae
+Flint and Feather | Johnson, E. Pauline
+Sunshine Sketches of a Little Town | Leacock
+The Spell of the Yukon | Service
+The Aesop for Children | Aesop
+Grimms' Fairy Tales | Grimm
+Andersen's Fairy Tales | Andersen
+The Declaration of Independence |
