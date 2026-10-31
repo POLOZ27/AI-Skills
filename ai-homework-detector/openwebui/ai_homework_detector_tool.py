@@ -1,7 +1,7 @@
 """
 title: AI Homework Detector
 description: 本地检测作业文本是否可能由 AI 生成（中英文），使用开源 AIGC_text_detector 模型，结果仅供参考
-version: 0.2.0
+version: 0.2.1
 license: Apache-2.0
 requirements: transformers, torch
 """
@@ -98,12 +98,13 @@ class Tools:
     def _false_positive_note(self, level, lang):
         """Calibrated 2026-10-31 on 1,000 pre-ChatGPT English student essays (PERSUADE 2.0) at thresholds 0.95 / 0.80."""
         if lang != "en":
-            return "误判率参考：中文检测尚未用真实学生作文校准，误判率未知，请格外谨慎。"
+            return ("误判率参考：中文检测尚未用真实学生作文校准，误判率未知，请格外谨慎。"
+                    "漏判参考：测试中，原样的 AI 中文作文只有约 1/4 被判为『高』，改写成学生口吻的约 9 成测不出。")
         if level == "高":
             return "误判率参考：在 1,000 篇 ChatGPT 出现前的真实中学生英文作文测试中，约 0.7% 的真人作文（约每 150 篇 1 篇）会落在『高』。"
         if level == "中":
-            return "误判率参考：同一测试中，约 1.6% 的真人作文会达到『中』或以上。"
-        return "误判率参考：『低』不代表一定是学生自己写的，改写过的 AI 文本也可能得低分。"
+            return "误判率参考：同一测试中，约 1.6% 的真人作文会达到『中』或以上。" + "漏判参考：测试中，原样的 AI 作文约 1/3 达不到『高』；改写成学生口吻、加了错字的 AI 作文约 9 成会被判为『低』。"
+        return "误判率参考：『低』不代表一定是学生自己写的，改写过的 AI 文本也可能得低分。" + "漏判参考：测试中，原样的 AI 作文约 1/3 达不到『高』；改写成学生口吻、加了错字的 AI 作文约 9 成会被判为『低』。"
 
     def _too_short(self, text, lang):
         if lang == "zh":
