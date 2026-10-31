@@ -11,7 +11,8 @@
 - params：`function_calling: native`，`custom_params: {"reasoning_budget_tokens": 1024}`
 - capabilities：file_context、vision、file_upload、citations、status_updates、builtin_tools 打开；web_search、image_generation、code_interpreter、terminal、memory 关闭
 - builtinTools：只开 time、knowledge、skills、files、user_input
-- 工具：cseec_assessment_export、ai_homework_detector
+- 工具：cseec_assessment_export、ai_homework_detector、cseec_source_texts（2026-10-31 新增，见 cseec-source-texts/README.md）
+- 2026-10-30 在提示词末尾追加"## 原文规则"，2026-10-31 随读原文工具更新为新版本（全文见 cseec-source-texts/README.md）。
 - 技能：admissions-source-check、parent-biweekly-report、grade-trend-analysis、teacher-file-assistant、ai-homework-detector、bc-quiz-generator
 - 过滤器：cseec_trim_tool_history（另有全局的 cseec_student_safety_guard）
 - 知识库：CSEEC · 总部政策与工作规范、CSEEC · 校区教学模板
