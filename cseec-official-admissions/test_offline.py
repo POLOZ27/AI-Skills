@@ -30,6 +30,8 @@ class P: pass
 def fake_fetch(url, inst):
     p = adm.Page(); p.raw = html2; p.feed(html2); return p, url
 adm.fetch_page = fake_fetch; adm.store_result = lambda k, r: None; adm.cached_result = lambda k: None
+def no_network(fields): raise OSError("offline test")
+adm.ubc_post = no_network
 r = adm.collect("ubc", "requirements", "science", 2027)
 assert r["status"] == "no_requirement_text" and "冲刺" in r["instruction"], r["status"]
 def fake_fetch2(url, inst):
@@ -66,4 +68,18 @@ assert r["status"] == "no_requirement_text" and r["failures"] and seen, r["statu
 seen.clear()
 r = adm.collect("sfu", "requirements", "science", 2027)
 assert any(u.endswith("/bc-yukon/science.html") for u in seen), seen
+# 9 program link choice: other directions are skipped, "science" alone never excludes
+links_html = "<html><body><main>" + "<p>Admission requirements for BC and Yukon applicants: English 12 with a minimum of 70%.</p>"*6 + "".join(
+    f"<p><a href='https://www.sfu.ca/students/admission/admission-requirements/canadian-highschool/bc-yukon/{n}.html'>{n}</a></p>"
+    for n in ("computing-science", "engineering-science", "arts-and-social-sciences", "business", "science")) + "</main></body></html>"
+def link_fetch(url, inst):
+    seen.append(url); p = adm.Page(); p.raw = links_html; p.feed(links_html); return p, url
+adm.fetch_page = link_fetch
+def picked(program):
+    seen.clear(); adm.collect("sfu", "requirements", program, 2027); return [u.rsplit("/", 1)[-1] for u in seen[1:]]
+assert "computing-science.html" in picked("computing"), picked("computing")
+assert "engineering-science.html" in picked("engineering"), picked("engineering")
+assert "arts-and-social-sciences.html" in picked("arts"), picked("arts")
+sci = picked("science")
+assert "science.html" in sci and not {"computing-science.html", "engineering-science.html", "arts-and-social-sciences.html"} & set(sci), sci
 print("all ok 2")

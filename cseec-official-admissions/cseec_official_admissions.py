@@ -755,7 +755,9 @@ def collect(institution, topic, program, entry_year):
             )
             if index == 0 and program != "general":
                 # "science" also matches Computing Science / Engineering Science pages: skip links naming another direction.
-                others = {w for name, words in PROGRAM_WORDS.items() if name != program for w in words} - set(PROGRAM_WORDS[program])
+                # "science" itself is never an exclusion word: computing-science / engineering-science / social-sciences
+                # pages belong to those directions.
+                others = {w for name, words in PROGRAM_WORDS.items() if name != program for w in words} - set(PROGRAM_WORDS[program]) - {"science"}
                 ranked = [
                     link
                     for link in links
