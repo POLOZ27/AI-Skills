@@ -504,12 +504,15 @@ TOPIC_TERMS = {
     "history": ("average", "range", "%", "admitted", "enrolment", "enrollment", "report", "past three"),
 }
 # A percentage only counts next to admission words ("95% of the universe", "50% complete" do not).
+# "% complete" (progress) and "70% of the required units" (degree rules) are not admission grades.
+NOT_GRADE = r"(?!\s*(?:complete|of (?:the |your |all )?(?:required |total )?(?:units|credits|courses|modules|the universe)))"
 PERCENT = (
-    r"\b(?:average|grade|minimum|admission|admitted|mark|at least|required|competitive|range)s?\b[^.\n]{0,40}\b\d{2}(?:\.\d)?\s?%"
-    r"|\b\d{2}(?:\.\d)?\s?%(?!\s*complete)[^.\n]{0,30}(?:average|minimum|or higher|or above|in (?:english|grade|all))"
+    r"\b(?:average|grade|minimum|admission|admitted|mark|at least|required|competitive|range)s?\b[^.\n]{0,40}\b\d{2}(?:\.\d)?\s?%" + NOT_GRADE +
+    r"|\b\d{2}(?:\.\d)?\s?%" + NOT_GRADE + r"[^.\n]{0,30}(?:average|minimum|or higher|or above|in (?:english|grade|all))"
 )
 # Admission-average tables: "Mid-80s", "high 70s", or a cell that is just "90%+".
 AVERAGE_TABLE = r"\b(?:low|mid|high|upper|lower)[- ]?\d0s\b|(?m:^)[|\s]*\d{2}(?:\.\d)?\s?%\+?[|\s]*(?m:$)|\b\d{2}%\+"
+NOT_ADDRESS = r"(?!\s*(?:st\b|st\.|street|ave\b|avenue|road|rd\b|floor|suite))"
 MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 # Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
 EVIDENCE_PATTERNS = {
@@ -520,8 +523,8 @@ EVIDENCE_PATTERNS = {
         r"\bminimum\b[^.\n]{0,60}\d",
     ),
     "language": (
-        r"\b(?:ielts|toefl|duolingo|pte|cael)\b[^\n]{0,60}\d",
-        r"\benglish(?: studies)?(?: first peoples)? 12\b[^\n]{0,60}\d",
+        r"\b(?:ielts|toefl|duolingo|pte|cael)\b[^\n]{0,60}?\b\d{1,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        r"\benglish(?: studies)?(?: first peoples)? 12\b[^\n]{0,60}?\b\d{2,3}(?:\.\d)?\b" + NOT_ADDRESS,
     ),
     "deadlines": (
         MONTHS + r"\s+\d{1,2}\b",
@@ -582,12 +585,24 @@ def merge_windows(indexes, before, after, total):
     return blocks
 
 
+def ordered_excerpts(lines, terms, topic, maximum):
+    """Page order, nothing dropped inside a window: date tables ("January 15, 2027" | "Applications due") stay aligned."""
+    chosen = set()
+    for index, line in enumerate(lines):
+        if (len(line) >= 30 or re.search(r"\d", line)) and any(w in line.lower() for w in terms):
+            chosen.update(range(max(0, index - 3), min(len(lines), index + 10)))
+    result = "\n".join(lines[i] for i in sorted(chosen)) or "\n".join(lines)
+    return result[:maximum], len(result) > maximum
+
+
 def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=()):
     """Evidence first (BC section, then small windows around requirement lines), then other keyword context.
 
     Lines that are only a link label (program menus) are left out unless they carry evidence themselves.
     """
     lines = text.splitlines()
+    if topic != "requirements":
+        return ordered_excerpts(lines, tuple(keywords) + TOPIC_TERMS.get(topic, ()), topic, maximum)
     labels = {" ".join(label.split()).lower() for label in link_labels if label and label.strip()}
     keep = [line for line in lines if line.lower() not in labels or has_evidence(line, topic)]
     lines = keep
@@ -944,7 +959,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read live official admissions evidence. Public IDs only; never student data. When the teacher names a program, pass that program on the first call (life sciences / health → science); do not query "general" first and then the program again.
+        """Read live official admissions evidence. Public IDs only; never student data. When the teacher names a program, pass that program on the first call (life sciences / health → science); do not query "general" first and then the program again. Query only the topics the teacher asked about.
 
         :param institution: University ID (ubc, sfu, utoronto, uwaterloo, mcmaster, mcgill, queens, western, ualberta, ucalgary, uottawa, yorku, tmu, hku, cuhk, hkust, nus, ntu); no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.
@@ -971,7 +986,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. When the teacher names a program, pass that program in this first call (life sciences / health → science) instead of "general" followed by per-university calls. Public IDs only; never student data.
+        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. When the teacher names a program, pass that program in this first call (life sciences / health → science) instead of "general" followed by per-university calls. Query only the topics the teacher asked about. Public IDs only; never student data.
 
         :param institutions: University IDs, e.g. ["ubc", "sfu", "uwaterloo"]; no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.

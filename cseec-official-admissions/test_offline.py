@@ -112,4 +112,20 @@ queens = "The table below corresponds to the minimum average (based on prerequis
 assert adm.has_evidence(queens, "history")
 assert adm.has_evidence("| 90%+", "history") and adm.has_evidence("Life Sciences: high 80s", "history")
 assert not adm.has_evidence("Grade 12 English (or their equivalents)", "history")
+# 15 deadlines table keeps date/event alignment (UBC style: date first, event after)
+ubc_dates = "<html><body><main>" + "<p>Key dates for applicants to UBC undergraduate programs in the 2027 winter session are listed below.</p>"*3 + "<table>" + "".join(
+    f"<tr><td>{d}</td><td><a href='/applying-ubc/x'>{e}</a></td></tr>" for d, e in (
+        ("Early October 2026", "Application opens"),
+        ("November 15, 2026", "International Scholars application deadline"),
+        ("December 1, 2026", "Canadian scholarship deadline"),
+        ("January 15, 2027", "Applications due"))) + "</table></main></body></html>"
+p = adm.Page(); p.raw = ubc_dates; p.feed(ubc_dates)
+ex, _ = adm.excerpts(p.visible_text(), (), "deadlines", link_labels=[l for _, l in p.links])
+for d, e in (("Early October 2026", "Application opens"), ("January 15, 2027", "Applications due"), ("November 15, 2026", "International Scholars")):
+    row = next(line for line in ex.splitlines() if d in line)
+    assert e in row, (d, row, ex)
+# 16 optimistic false positives
+assert not adm.has_evidence("Students must pass at least 70% of the required units", "requirements")
+assert not adm.has_evidence("Send TOEFL score reports to 172 St. George St., Toronto", "language")
+assert adm.has_evidence("IELTS Academic: overall band 6.5, no band below 6.0", "language")
 print("all ok 2")

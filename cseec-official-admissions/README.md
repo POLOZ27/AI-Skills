@@ -37,3 +37,6 @@
   - 工具说明里写明：老师说了专业时，第一次调用就传对应 program（生命科学 / 健康 → science），不要先查 general 再按专业重查。
   - 摘录最前面先放 "Required Courses" 一类标题后面的约 25 行（SFU 的专业要求就在这种标题下），再放 BC 省份段。
   - 录取平均分表格："Mid-80s"、"high 70s"、单独一格的 "90%+" 也算录取分数证据（Queen's 往年录取平均分表）。
+  - 只有 requirements 主题会重排摘录、去掉纯链接行；deadlines、language、history 按页面原顺序保留，日期和事项不会错开（d8ad242 曾把 UBC 的"Early October 2026 → Application opens"错位，已退回）。
+  - "at least 70% of the required units" 这类学位规则、"172 St. George St." 这类地址不再算作分数证据。
+  - 工具说明里加上"只查老师问到的主题"。
