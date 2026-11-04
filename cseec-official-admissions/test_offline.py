@@ -101,4 +101,15 @@ uoft_html = f"<html><body><main>{prov}<h3>British Columbia</h3><p>High School Di
 p = adm.Page(); p.raw = uoft_html; p.feed(uoft_html)
 ex, _ = adm.excerpts(p.visible_text(), ("science",), "requirements")
 assert ex.startswith("British Columbia") and "Manitoba" not in ex.split("…")[0], ex[:300]
+# 13 SFU-like: requirement lines spread through a long page; the Required Courses block still comes first
+spread = "".join(f"<p>Early admission note {i}: applicants presenting English Studies 12 or Chemistry 12 are reviewed in rounds with long explanatory text here.</p>" for i in range(30))
+html13 = f"<html><body><main>{spread}{req}</main></body></html>"
+p = adm.Page(); p.raw = html13; p.feed(html13)
+ex, _ = adm.excerpts(p.visible_text(), ("science",), "requirements")
+assert ex.startswith("Required Courses") and "Pre-Calculus 12" in ex[:600], ex[:300]
+# 14 Queen's admission averages table
+queens = "The table below corresponds to the minimum average (based on prerequisite courses) required for admission consideration for September of last year.\n| Arts (QA) |\n| Mid-80s |\n| Commerce* (QC) |\n| 90%+ |"
+assert adm.has_evidence(queens, "history")
+assert adm.has_evidence("| 90%+", "history") and adm.has_evidence("Life Sciences: high 80s", "history")
+assert not adm.has_evidence("Grade 12 English (or their equivalents)", "history")
 print("all ok 2")

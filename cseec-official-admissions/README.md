@@ -35,3 +35,5 @@
   - 百分比必须挨着 average / grade / minimum / admission 等词才算分数要求（UofT 页面的 "95% of the universe" 曾被误判）。
   - UofT：要求页改为 `requirements-canadian-high-schools`（含 BC 课程对照），不再跟进学科介绍页；`scope_note` 说明专业先修和录取分数需人工核实。
   - 工具说明里写明：老师说了专业时，第一次调用就传对应 program（生命科学 / 健康 → science），不要先查 general 再按专业重查。
+  - 摘录最前面先放 "Required Courses" 一类标题后面的约 25 行（SFU 的专业要求就在这种标题下），再放 BC 省份段。
+  - 录取平均分表格："Mid-80s"、"high 70s"、单独一格的 "90%+" 也算录取分数证据（Queen's 往年录取平均分表）。

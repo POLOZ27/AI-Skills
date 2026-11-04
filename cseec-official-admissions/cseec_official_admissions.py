@@ -508,12 +508,15 @@ PERCENT = (
     r"\b(?:average|grade|minimum|admission|admitted|mark|at least|required|competitive|range)s?\b[^.\n]{0,40}\b\d{2}(?:\.\d)?\s?%"
     r"|\b\d{2}(?:\.\d)?\s?%(?!\s*complete)[^.\n]{0,30}(?:average|minimum|or higher|or above|in (?:english|grade|all))"
 )
+# Admission-average tables: "Mid-80s", "high 70s", or a cell that is just "90%+".
+AVERAGE_TABLE = r"\b(?:low|mid|high|upper|lower)[- ]?\d0s\b|(?m:^)[|\s]*\d{2}(?:\.\d)?\s?%\+?[|\s]*(?m:$)|\b\d{2}%\+"
 MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 # Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
 EVIDENCE_PATTERNS = {
     "requirements": (
         r"\b(?:english|math\w*|pre-?calculus|calculus|chemistry|physics|biology|science|social studies|language|literature)[a-z0-9 ,&/\-]{0,40}\b1[12]\b",
         PERCENT,
+        AVERAGE_TABLE,
         r"\bminimum\b[^.\n]{0,60}\d",
     ),
     "language": (
@@ -525,7 +528,7 @@ EVIDENCE_PATTERNS = {
         r"\b\d{1,2}\s+" + MONTHS,
         r"\b20\d{2}-\d{2}-\d{2}\b",
     ),
-    "history": (PERCENT, r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
+    "history": (PERCENT, AVERAGE_TABLE, r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
 }
 
 
@@ -553,6 +556,21 @@ def bc_section(lines):
     return None
 
 
+REQUIRED_HEADINGS = (
+    "required courses", "required high school courses", "prerequisite courses", "prerequisites",
+    "course requirements", "program prerequisites", "required grade 12 courses",
+)
+
+
+def heading_section(lines, length=25):
+    """Index range of a 'Required Courses' style block (heading line plus the lines after it), else None."""
+    for index, line in enumerate(lines):
+        label = line.strip().strip(":").lower()
+        if label in REQUIRED_HEADINGS:
+            return index, min(len(lines), index + length)
+    return None
+
+
 def merge_windows(indexes, before, after, total):
     blocks = []
     for i in sorted(indexes):
@@ -576,10 +594,12 @@ def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=())
     used = set()
     parts = []
     if topic == "requirements":
-        section = bc_section(lines)
-        if section:
-            parts.append("\n".join(lines[section[0]:section[1]]))
-            used.update(range(*section))
+        for section in (heading_section(lines), bc_section(lines)):
+            if section:
+                block = [i for i in range(*section) if i not in used]
+                if block:
+                    parts.append("\n".join(lines[i] for i in block))
+                    used.update(block)
     evidence = [i for i, line in enumerate(lines) if i not in used and has_evidence(line, topic)]
     for low, high in merge_windows(evidence, 3, 8, len(lines)):
         block = [i for i in range(low, high) if i not in used]
