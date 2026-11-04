@@ -40,3 +40,5 @@
   - 只有 requirements 主题会重排摘录、去掉纯链接行；deadlines、language、history 按页面原顺序保留，日期和事项不会错开（d8ad242 曾把 UBC 的"Early October 2026 → Application opens"错位，已退回）。
   - "at least 70% of the required units" 这类学位规则、"172 St. George St." 这类地址不再算作分数证据。
   - 工具说明里加上"只查老师问到的主题"。
+  - language 恢复"证据优先"排序；考试名和分数可以隔几行（表格常把分数放在下一格），也认 "overall band of 6.5"、"90 overall"、"iBT: 88"；考试代码（0894）、年份、街道号、"January 21, 2026" 不算分数。
+  - deadlines：日期旁边要有 deadline / apply / application / due / documents / decision 等词才算（SFU 菜单里的活动日期不再算）；认 "Early October 2026"、"Mid-November to mid-May" 这类写法。

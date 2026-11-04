@@ -513,7 +513,14 @@ PERCENT = (
 # Admission-average tables: "Mid-80s", "high 70s", or a cell that is just "90%+".
 AVERAGE_TABLE = r"\b(?:low|mid|high|upper|lower)[- ]?\d0s\b|(?m:^)[|\s]*\d{2}(?:\.\d)?\s?%\+?[|\s]*(?m:$)|\b\d{2}%\+"
 NOT_ADDRESS = r"(?!\s*(?:st\b|st\.|street|ave\b|avenue|road|rd\b|floor|suite))"
+# A test score: 1–3 digits, not a 4-digit test code (0894), not a year, not a street number, not "January 21, 2026".
+SCORE = r"(?<![\d,])\b\d{1,3}(?:\.\d)?\b(?!\d)(?!,?\s*20\d{2})" + NOT_ADDRESS
+APPLY_WORDS = r"\b(?:deadline|apply|applications?|due|submit|submission|documents?|transcripts?|decisions?|offers?|admission|opens|closes)\b"
 MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+DATE = (
+    r"(?:" + MONTHS + r"\s+\d{1,2}\b|\b\d{1,2}\s+" + MONTHS + r"|\b20\d{2}-\d{2}-\d{2}\b"
+    r"|\b(?:early|mid|late)[- ]" + MONTHS + r"(?:\s+20\d{2})?)"
+)
 # Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
 EVIDENCE_PATTERNS = {
     "requirements": (
@@ -523,13 +530,16 @@ EVIDENCE_PATTERNS = {
         r"\bminimum\b[^.\n]{0,60}\d",
     ),
     "language": (
-        r"\b(?:ielts|toefl|duolingo|pte|cael)\b[^\n]{0,60}?\b\d{1,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        # Test name, then a score within a few lines (pages often put the score in the next table cell).
+        r"\b(?:ielts|toefl|duolingo|pte|cael|celpip|cambridge)\b[\s\S]{0,150}?" + SCORE,
         r"\benglish(?: studies)?(?: first peoples)? 12\b[^\n]{0,60}?\b\d{2,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        r"\b(?:overall|band|section|writing|speaking|reading|listening|ibt|total)\b(?: band)?(?: score)?(?: of)?:?\s*\d{1,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        r"\b\d{1,3}(?:\.\d)?\s+(?:overall|in (?:each|writing|speaking|reading|listening))\b",
     ),
     "deadlines": (
-        MONTHS + r"\s+\d{1,2}\b",
-        r"\b\d{1,2}\s+" + MONTHS,
-        r"\b20\d{2}-\d{2}-\d{2}\b",
+        # A date only counts with an application word nearby (event dates in menus do not).
+        DATE + r"[\s\S]{0,80}?" + APPLY_WORDS,
+        APPLY_WORDS + r"[\s\S]{0,80}?" + DATE,
     ),
     "history": (PERCENT, AVERAGE_TABLE, r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
 }
@@ -601,7 +611,7 @@ def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=())
     Lines that are only a link label (program menus) are left out unless they carry evidence themselves.
     """
     lines = text.splitlines()
-    if topic != "requirements":
+    if topic not in ("requirements", "language"):
         return ordered_excerpts(lines, tuple(keywords) + TOPIC_TERMS.get(topic, ()), topic, maximum)
     labels = {" ".join(label.split()).lower() for label in link_labels if label and label.strip()}
     keep = [line for line in lines if line.lower() not in labels or has_evidence(line, topic)]
@@ -615,7 +625,8 @@ def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=())
                 if block:
                     parts.append("\n".join(lines[i] for i in block))
                     used.update(block)
-    evidence = [i for i, line in enumerate(lines) if i not in used and has_evidence(line, topic)]
+    span = 4 if topic == "language" else 1  # language scores often sit a line or two after the test name
+    evidence = [i for i in range(len(lines)) if i not in used and has_evidence("\n".join(lines[i:i + span]), topic)]
     for low, high in merge_windows(evidence, 3, 8, len(lines)):
         block = [i for i in range(low, high) if i not in used]
         if block:

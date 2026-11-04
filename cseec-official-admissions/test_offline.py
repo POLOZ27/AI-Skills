@@ -128,4 +128,24 @@ for d, e in (("Early October 2026", "Application opens"), ("January 15, 2027", "
 assert not adm.has_evidence("Students must pass at least 70% of the required units", "requirements")
 assert not adm.has_evidence("Send TOEFL score reports to 172 St. George St., Toronto", "language")
 assert adm.has_evidence("IELTS Academic: overall band 6.5, no band below 6.0", "language")
+# 17 language scores across lines (real page text, 2026-11-04)
+for text in (
+    "A minimum overall band score of 6.5\nA minimum of 6.0 in each section",
+    "(IELTS)\n|\nA score of 6.5 on Academic Module with no band below 6.0",
+    "| TOEFL\nTest of English as a Foreign Language\nYork's TOEFL code is 0894\n| iBT: 88 for tests taken prior to January 2026",
+    "(IELTS) Academic\n|\n6.5\n|\n6.5",
+    "The minimum requirement is an overall band of 6.5, with no band below 6.0",
+    "Tests completed before January 21, 2026 require\n90 overall\n25 in writing, 25 in speaking",
+):
+    assert adm.has_evidence(text, "language"), text
+assert not adm.has_evidence("York's TOEFL code is 0894. Tests taken after January 21, 2026 are accepted.", "language")
+# language scores late on a long page still reach the first 2500 characters
+long_lang = "<html><body><main>" + "<p>Applicants whose first language is not English must show English language competency in one of several ways described below.</p>"*40 + "<p>IELTS Academic</p><p>6.5 overall, no band below 6.0</p></main></body></html>"
+p = adm.Page(); p.raw = long_lang; p.feed(long_lang)
+assert "6.5 overall" in adm.excerpts(p.visible_text(), (), "language")[0][:2500]
+# 18 deadlines need an application word; event dates in menus do not count
+assert not adm.has_evidence("See Yourself at SFU | November 14, 2026", "deadlines")
+assert adm.has_evidence("| January 15, 2027 | Applications due", "deadlines")
+assert adm.has_evidence("Early October 2026\nApplication opens", "deadlines")
+assert adm.has_evidence("Estimated decision dates\nHigh schools outside the U.S. and Canada\nMid-November to mid-May", "deadlines")
 print("all ok 2")
