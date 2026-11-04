@@ -25,3 +25,8 @@
 - 新状态：`evidence_found`（正文里读到了具体课程 / 分数 / 日期）或 `no_requirement_text`（没读到，附 instruction：需人工核实，不得据常识判断冲刺/匹配/保底）。每个来源另有 `specific_evidence_found`。
 - UBC 的课程要求是网页脚本按校区/省份/学位再加载的，本工具读不到；新增 `scope_note` 提示人工在 you.ubc.ca 核实。没有去调 UBC 的内部接口。
 - 缓存键加了 `v5:` 前缀，旧版本的缓存结果不会被沿用。
+- 2026-11-04 实测后补充：
+  - UBC：改为调用 you.ubc.ca 选择器背后的公开接口（`/wp-admin/admin-ajax.php`，POST，robots.txt 允许），按 BC、温哥华校区和学位名称取要求（Science、Applied Science (Engineering)、Commerce、Arts；computing 对应 Science 并注明）。接口失败时退回读静态页面，状态会是 `no_requirement_text`。
+  - SFU：program=science 时直接读理学院页面（`bc-yukon/science.html`）；挑专业链接时跳过写着其他方向的链接（例如 Computing Science、Engineering Science）。
+  - "50% complete" 这类完成进度不再算作分数要求。
+  - 离线测试：`python3 cseec-official-admissions/test_offline.py`。

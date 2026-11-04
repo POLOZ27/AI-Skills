@@ -158,7 +158,7 @@ SOURCES = {
     },
 }
 SCOPE_NOTES = {
-    "ubc": "UBC course and grade requirements are loaded by a script after choosing campus, province and degree, so this reader cannot see them; check you.ubc.ca manually (choose British Columbia and the degree).",
+    "ubc": "UBC requirements come from UBC's own requirements service for BC applicants, Vancouver campus (the same data the you.ubc.ca selector shows). Okanagan campus and non-BC curricula need manual checking.",
     "nus": "Only NUS School of Computing pages are readable; university-wide international-qualification requirements and the IGP are on nus.edu.sg/oam and need manual checking.",
 }
 # Third-party pages (not the university's own site). Results are always labelled unofficial.
@@ -212,6 +212,21 @@ PROGRAM_WORDS = {
     "business": ("business", "commerce", "beedie"),
     "science": ("science",),
     "arts": ("arts", "humanities", "social-science"),
+}
+# Program pages that the generic link discovery would miss (link text does not name the program).
+PROGRAM_PAGES = {
+    ("sfu", "science"): "https://www.sfu.ca/students/admission/admission-requirements/canadian-highschool/bc-yukon/science.html",
+}
+# UBC loads requirements with a script from this public endpoint (robots.txt allows it).
+UBC_AJAX = "https://you.ubc.ca/wp-admin/admin-ajax.php"
+UBC_PAGE = "https://you.ubc.ca/applying-ubc/requirements/canadian-high-schools/"
+UBC_BC_LOCATION = "686"
+UBC_DEGREES = {
+    "science": "Science",
+    "computing": "Science",
+    "engineering": "Applied Science (Engineering)",
+    "business": "Commerce (UBC Sauder School of Business)",
+    "arts": "Arts",
 }
 LIMIT = 6 * 1024 * 1024
 ROBOTS_TIMEOUT = 5
@@ -490,7 +505,7 @@ MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 EVIDENCE_PATTERNS = {
     "requirements": (
         r"\b(?:english|math\w*|pre-?calculus|calculus|chemistry|physics|biology|science|social studies|language|literature)[a-z0-9 ,&/\-]{0,40}\b1[12]\b",
-        r"\b\d{2}(?:\.\d)?\s?%",
+        r"\b\d{2}(?:\.\d)?\s?%(?!\s*complete)",
         r"\bminimum\b[^.\n]{0,60}\d",
     ),
     "language": (
@@ -502,7 +517,7 @@ EVIDENCE_PATTERNS = {
         r"\b\d{1,2}\s+" + MONTHS,
         r"\b20\d{2}-\d{2}-\d{2}\b",
     ),
-    "history": (r"\b\d{2}(?:\.\d)?\s?%", r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
+    "history": (r"\b\d{2}(?:\.\d)?\s?%(?!\s*complete)", r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
 }
 
 
@@ -541,6 +556,83 @@ NO_EVIDENCE_INSTRUCTION = (
     "官网正文里没有读到具体要求（课程、分数、日期），需人工核实。"
     "Do not judge competitiveness (冲刺/匹配/保底/匹配偏上) or state requirements for this university/topic from general knowledge."
 )
+
+
+def html_text(fragment):
+    page = Page()
+    page.feed(fragment or "")
+    return clean_lines("".join(page.full))
+
+
+def ubc_post(fields):
+    """POST to UBC's fixed public requirements endpoint; nothing but these public form fields is sent."""
+    from urllib.parse import urlencode
+
+    parts = urlsplit(UBC_AJAX)
+    addresses = socket.getaddrinfo(parts.hostname, 443, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+        raise ValueError("Non-public destination blocked")
+    if not robots_allowed(UBC_AJAX):
+        raise PermissionError("robots.txt disallows automated reading")
+    opener = build_opener(ProxyHandler({}), HTTPSHandler(context=TLS))
+    request = Request(
+        UBC_AJAX,
+        data=urlencode(fields).encode(),
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Encoding": "identity"},
+    )
+    lock = host_lock(parts.hostname)
+    if not lock.acquire(timeout=30):
+        raise TimeoutError("Another read of this site is still running")
+    try:
+        with opener.open(request, timeout=PAGE_TIMEOUT) as response:
+            if urlsplit(response.url).hostname != parts.hostname:
+                raise ValueError("Unexpected redirect")
+            raw = response.read(LIMIT + 1)
+    finally:
+        lock.release()
+    if len(raw) > LIMIT:
+        raise ValueError("Response exceeds 6 MiB")
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    if not isinstance(data, dict) or not data.get("result"):
+        raise ValueError("UBC requirements service returned no result")
+    return data
+
+
+def ubc_requirements(program):
+    """BC applicant requirements (Vancouver) from the service behind UBC's requirements selector."""
+    base = {"type": "requirement_province", "location": UBC_BC_LOCATION, "campus": "vancouver", "theme": "page_requirements"}
+    listing = ubc_post({"action": "requirements_load_programs", **base})
+    parts = [("General requirements", listing.get("general")), ("English requirement", listing.get("english"))]
+    degree_name = UBC_DEGREES.get(program)
+    note = None
+    if degree_name:
+        programs = listing.get("programs") or {}
+        degree_id = next((k for k, v in programs.items() if str(v).strip().lower() == degree_name.lower()), None)
+        if degree_id is None:
+            note = f"Degree '{degree_name}' not listed by UBC's service; check manually."
+        else:
+            detail = ubc_post({"action": "requirements_load_program", "requirement": str(degree_id), **base})
+            parts.insert(0, (f"Degree: {degree_name}", detail.get("specific")))
+            if program == "computing":
+                note = "UBC has no separate computing degree for BC applicants; Computer Science is a Science major, so Science requirements are shown."
+    text = "\n".join(f"## {title}\n{html_text(body)}" for title, body in parts if body)
+    if readable_length(text) < 50:
+        raise ValueError("Insufficient readable content; manual verification required")
+    source = {
+        "url": UBC_PAGE,
+        "title": "UBC – Canadian high schools (British Columbia, Vancouver campus)" + (f" – {degree_name}" if degree_name else ""),
+        "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_year_mentions": sorted(set(re.findall(r"\b20\d{2}\b", text))),
+        "applicable_entry_year": None,
+        "requires_counsellor_verification": True,
+        "excerpt": text[:5000],
+        "excerpt_truncated": len(text) > 5000,
+        "specific_evidence_found": has_evidence(text, "requirements"),
+        "read_via": "UBC requirements service (same data as the you.ubc.ca selector)",
+    }
+    if note:
+        source["note"] = note
+    return source
 
 
 def collect(institution, topic, program, entry_year):
@@ -599,6 +691,15 @@ def collect(institution, topic, program, entry_year):
         ] + ([SCOPE_NOTES[institution]] if institution in SCOPE_NOTES else []),
     }
     pending = [SOURCES[institution][topic]]
+    if institution == "ubc" and topic == "requirements":
+        try:
+            result["sources"].append(ubc_requirements(program))
+            pending = []  # the static page has no requirement text; the service result replaces it
+        except Exception as error:
+            result["failures"].append({"url": UBC_AJAX, "reason": type(error).__name__, "status": "manual_verification_required"})
+    extra = PROGRAM_PAGES.get((institution, program))
+    if extra and topic == "requirements":
+        pending.append(extra)
     for index in range(3):
         if index >= len(pending):
             break
@@ -653,13 +754,13 @@ def collect(institution, topic, program, entry_year):
                 }
             )
             if index == 0 and program != "general":
+                # "science" also matches Computing Science / Engineering Science pages: skip links naming another direction.
+                others = {w for name, words in PROGRAM_WORDS.items() if name != program for w in words} - set(PROGRAM_WORDS[program])
                 ranked = [
                     link
                     for link in links
-                    if any(
-                        word in (link["title"] + " " + link["url"]).lower()
-                        for word in PROGRAM_WORDS[program]
-                    )
+                    if any(word in (label := (link["title"] + " " + link["url"]).lower()) for word in PROGRAM_WORDS[program])
+                    and not any(word in label for word in others)
                 ]
                 pending.extend(
                     link["url"] for link in ranked if link["url"] not in pending
