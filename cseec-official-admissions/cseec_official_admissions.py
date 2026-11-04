@@ -2,7 +2,7 @@
 title: CSEEC Official Admissions
 description: Read live public admissions evidence from allowlisted official university sites (Canada, Hong Kong, Singapore) without transmitting student data.
 author: CSEEC
-version: 0.4.0
+version: 0.5.0
 license: MIT
 """
 
@@ -29,7 +29,7 @@ from urllib.request import (
 )
 from urllib.robotparser import RobotFileParser
 
-USER_AGENT = "CSEEC-Admissions-Reader/0.3 (+https://www.cseec.ca)"
+USER_AGENT = "CSEEC-Admissions-Reader/0.5 (+https://www.cseec.ca)"
 # Also obey robots.txt rules aimed at user-triggered AI fetchers, since this tool is one.
 ROBOT_AGENTS = (USER_AGENT, "ChatGPT-User", "Claude-User", "Claude-Web")
 # Official Sectigo intermediate (from crt.sectigo.com) that admission.cuhk.edu.hk omits from its chain.
@@ -90,7 +90,7 @@ SOURCES = {
     },
     # Canadian universities: requirement pages for Canadian / BC (Dogwood) applicants where the school has one.
     "utoronto": {
-        "requirements": "https://future.utoronto.ca/requirements-canadian-students",
+        "requirements": "https://future.utoronto.ca/requirements-canadian-high-schools",
         "language": "https://future.utoronto.ca/english-language-requirements",
         "deadlines": "https://future.utoronto.ca/deadlines",
     },
@@ -158,6 +158,8 @@ SOURCES = {
     },
 }
 SCOPE_NOTES = {
+    "utoronto": "UofT pages give the BC course equivalents for all programs; program prerequisites and admission averages are on each program page and need manual checking.",
+    "ubc": "UBC requirements come from UBC's own requirements service for BC applicants, Vancouver campus (the same data the you.ubc.ca selector shows). Okanagan campus and non-BC curricula need manual checking.",
     "nus": "Only NUS School of Computing pages are readable; university-wide international-qualification requirements and the IGP are on nus.edu.sg/oam and need manual checking.",
 }
 # Third-party pages (not the university's own site). Results are always labelled unofficial.
@@ -212,6 +214,23 @@ PROGRAM_WORDS = {
     "science": ("science",),
     "arts": ("arts", "humanities", "social-science"),
 }
+# Program pages that the generic link discovery would miss (link text does not name the program).
+PROGRAM_PAGES = {
+    ("sfu", "science"): "https://www.sfu.ca/students/admission/admission-requirements/canadian-highschool/bc-yukon/science.html",
+}
+# Program links on these sites lead to subject overview pages, not requirements; do not follow them.
+NO_DISCOVERY = {"utoronto"}
+# UBC loads requirements with a script from this public endpoint (robots.txt allows it).
+UBC_AJAX = "https://you.ubc.ca/wp-admin/admin-ajax.php"
+UBC_PAGE = "https://you.ubc.ca/applying-ubc/requirements/canadian-high-schools/"
+UBC_BC_LOCATION = "686"
+UBC_DEGREES = {
+    "science": "Science",
+    "computing": "Science",
+    "engineering": "Applied Science (Engineering)",
+    "business": "Commerce (UBC Sauder School of Business)",
+    "arts": "Arts",
+}
 LIMIT = 6 * 1024 * 1024
 ROBOTS_TIMEOUT = 5
 PAGE_TIMEOUT = 8
@@ -221,7 +240,7 @@ RESULT_TTL = 24 * 3600
 CACHE_DIR = "/app/backend/data/cache/cseec_admissions"
 BATCH_LIMIT = 6
 # Tool output is re-read by the model on every later round, so keep what it returns short.
-EXCERPT_RETURN_LIMIT = 1500
+EXCERPT_RETURN_LIMIT = 2500
 DOCUMENTS_RETURN_LIMIT = 3
 # One lock per host: different universities are read in parallel, one site is never hit concurrently.
 _HOST_LOCKS = {}
@@ -305,6 +324,20 @@ class CheckedRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# Site chrome (menus, banners, footers) matches admissions keywords but holds no requirements.
+BOILERPLATE_TAGS = ("header", "nav", "footer", "aside")
+BOILERPLATE_ROLES = ("navigation", "banner", "contentinfo", "search")
+MAIN_TAGS = ("main", "article")
+
+
+def clean_lines(text):
+    return "\n".join(line for part in text.splitlines() if (line := " ".join(part.split())))
+
+
+def readable_length(text):
+    return len(re.sub(r"[\s|]", "", text))
+
+
 class Page(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -312,21 +345,47 @@ class Page(HTMLParser):
         self.in_title = False
         self.title = []
         self.text = []
+        self.full = []
+        self.main = []
         self.links = []
         self.anchor = None
+        self.chrome = None  # [tag, depth] while inside header/nav/footer/aside
+        self.main_scope = None  # [tag, depth] while inside main/article
+
+    def _track(self, scope, tag, opening):
+        if scope and scope[0] == tag:
+            scope[1] += 1 if opening else -1
+            if scope[1] <= 0:
+                return None
+        return scope
+
+    def _emit(self, value):
+        self.full.append(value)
+        if not self.chrome:
+            self.text.append(value)
+            if self.main_scope:
+                self.main.append(value)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag in ("script", "style", "noscript"):
             self.skip += 1
+        if self.chrome:
+            self.chrome = self._track(self.chrome, tag, True)
+        elif tag in BOILERPLATE_TAGS or (attrs.get("role") or "").lower() in BOILERPLATE_ROLES:
+            self.chrome = [tag, 1]
+        if self.main_scope:
+            self.main_scope = self._track(self.main_scope, tag, True)
+        elif tag in MAIN_TAGS or (attrs.get("role") or "").lower() == "main":
+            self.main_scope = [tag, 1]
         if tag == "title":
             self.in_title = True
         if tag == "a":
             self.anchor = [attrs.get("href") or "", ""]
         if tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
-            self.text.append("\n")
+            self._emit("\n")
         if tag in ("td", "th"):
-            self.text.append(" | ")
+            self._emit(" | ")
 
     def handle_endtag(self, tag):
         if tag in ("script", "style", "noscript") and self.skip:
@@ -337,7 +396,11 @@ class Page(HTMLParser):
             self.links.append(tuple(self.anchor))
             self.anchor = None
         if tag in ("p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
-            self.text.append("\n")
+            self._emit("\n")
+        if self.chrome:
+            self.chrome = self._track(self.chrome, tag, False)
+        if self.main_scope:
+            self.main_scope = self._track(self.main_scope, tag, False)
 
     def handle_data(self, data):
         if self.skip:
@@ -345,22 +408,23 @@ class Page(HTMLParser):
         if self.in_title:
             self.title.append(data)
         else:
-            self.text.append(data)
+            self._emit(data)
         if self.anchor is not None:
             self.anchor[1] += data
 
     def visible_text(self):
-        text = "\n".join(
-            line
-            for part in "".join(self.text).splitlines()
-            if (line := " ".join(part.split()))
-        )
-        if len(re.sub(r"[\s|]", "", text)) < 300 and getattr(self, "raw", ""):
+        """Prefer <main>/<article>, then the page without menus/footers, then everything."""
+        text = ""
+        for candidate in (self.main, self.text, self.full):
+            text = clean_lines("".join(candidate))
+            if readable_length(text) >= 300:
+                return text
+        if getattr(self, "raw", ""):
             # Malformed script/noscript nesting can leave the parser skipping the body; strip tags instead.
             raw = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1\s*>", " ", self.raw)
             raw = re.sub(r"(?i)<(br|/p|/div|/li|/tr|/h[1-6])\b[^>]*>", "\n", raw)
             raw = html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw))
-            text = "\n".join(line for part in raw.splitlines() if (line := " ".join(part.split())))
+            text = clean_lines(raw)
         return text
 
 
@@ -428,33 +492,241 @@ def read_page(url, institution):
         return parser, response.url
 
 
-def excerpts(text, keywords, maximum=5000):
-    """Keep source order and headings; output is an excerpt, never a full-coverage claim."""
-    lines = text.splitlines()
-    chosen = set()
-    terms = tuple(keywords) + (
-        "admission",
-        "requirement",
-        "deadline",
-        "minimum",
-        "past three",
-        "guarantee",
-        "enrolment",
-        "enrollment",
-        "grade",
-        "report",
-        "202",
-        "british columbia",
-        "canadian",
-        "advanced placement",
-        "average",
-        "english",
-    )
+TOPIC_TERMS = {
+    "requirements": (
+        "minimum", "required", "requirement", "prerequisite", "average", "grade 12", "grade 11",
+        "english 12", "english studies", "pre-calculus", "calculus", "chemistry", "physics",
+        "biology", "british columbia", "advanced placement", "dogwood", "competitive", "%",
+    ),
+    "language": ("ielts", "toefl", "duolingo", "pte", "cael", "english 12", "english studies", "minimum", "score"),
+    "deadlines": ("deadline", "apply by", "application", "document", "decision", "january", "february",
+                  "march", "april", "may", "november", "december", "october"),
+    "history": ("average", "range", "%", "admitted", "enrolment", "enrollment", "report", "past three"),
+}
+# A percentage only counts next to admission words ("95% of the universe", "50% complete" do not).
+# "% complete" (progress) and "70% of the required units" (degree rules) are not admission grades.
+NOT_GRADE = r"(?!\s*(?:complete|of (?:the |your |all )?(?:required |total )?(?:units|credits|courses|modules|the universe)))"
+PERCENT = (
+    r"\b(?:average|grade|minimum|admission|admitted|mark|at least|required|competitive|range)s?\b[^.\n]{0,40}\b\d{2}(?:\.\d)?\s?%" + NOT_GRADE +
+    r"|\b\d{2}(?:\.\d)?\s?%" + NOT_GRADE + r"[^.\n]{0,30}(?:average|minimum|or higher|or above|in (?:english|grade|all))"
+)
+# Admission-average tables: "Mid-80s", "high 70s", or a cell that is just "90%+".
+AVERAGE_TABLE = r"\b(?:low|mid|high|upper|lower)[- ]?\d0s\b|(?m:^)[|\s]*\d{2}(?:\.\d)?\s?%\+?[|\s]*(?m:$)|\b\d{2}%\+"
+NOT_ADDRESS = r"(?!\s*(?:st\b|st\.|street|ave\b|avenue|road|rd\b|floor|suite))"
+# A test score: 1–3 digits, not a 4-digit test code (0894), not a year, not a street number, not "January 21, 2026".
+SCORE = r"(?<![\d,])\b\d{1,3}(?:\.\d)?\b(?!\d)(?!,?\s*20\d{2})" + NOT_ADDRESS
+APPLY_WORDS = r"\b(?:deadline|apply|applications?|due|submit|submission|documents?|transcripts?|decisions?|offers?|admission|opens|closes)\b"
+MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+DATE = (
+    r"(?:" + MONTHS + r"\s+\d{1,2}\b|\b\d{1,2}\s+" + MONTHS + r"|\b20\d{2}-\d{2}-\d{2}\b"
+    r"|\b(?:early|mid|late)[- ]" + MONTHS + r"(?:\s+20\d{2})?)"
+)
+# Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
+EVIDENCE_PATTERNS = {
+    "requirements": (
+        r"\b(?:english|math\w*|pre-?calculus|calculus|chemistry|physics|biology|science|social studies|language|literature)[a-z0-9 ,&/\-]{0,40}\b1[12]\b",
+        PERCENT,
+        AVERAGE_TABLE,
+        r"\bminimum\b[^.\n]{0,60}\d",
+    ),
+    "language": (
+        # Test name, then a score within a few lines (pages often put the score in the next table cell).
+        r"\b(?:ielts|toefl|duolingo|pte|cael|celpip|cambridge)\b[\s\S]{0,150}?" + SCORE,
+        r"\benglish(?: studies)?(?: first peoples)? 12\b[^\n]{0,60}?\b\d{2,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        r"\b(?:overall|band|section|writing|speaking|reading|listening|ibt|total)\b(?: band)?(?: score)?(?: of)?:?\s*\d{1,3}(?:\.\d)?\b" + NOT_ADDRESS,
+        r"\b\d{1,3}(?:\.\d)?\s+(?:overall|in (?:each|writing|speaking|reading|listening))\b",
+    ),
+    "deadlines": (
+        # A date only counts with an application word nearby (event dates in menus do not).
+        DATE + r"[\s\S]{0,80}?" + APPLY_WORDS,
+        APPLY_WORDS + r"[\s\S]{0,80}?" + DATE,
+    ),
+    "history": (PERCENT, AVERAGE_TABLE, r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
+}
+
+
+def has_evidence(text, topic):
+    lowered = text.lower()
+    return any(re.search(pattern, lowered) for pattern in EVIDENCE_PATTERNS.get(topic, ()))
+
+
+PROVINCES = (
+    "alberta", "british columbia", "manitoba", "new brunswick", "newfoundland and labrador", "newfoundland",
+    "northwest territories", "nova scotia", "nunavut", "ontario", "prince edward island", "quebec", "québec",
+    "saskatchewan", "yukon",
+)
+
+
+def bc_section(lines):
+    """Index range of a 'British Columbia' section on pages that list every province, else None."""
     for index, line in enumerate(lines):
-        if any(word in line.lower() for word in terms):
-            chosen.update(range(max(0, index - 2), min(len(lines), index + 9)))
-    result = "\n".join(lines[i] for i in sorted(chosen)) or text
+        if line.strip().lower() in ("british columbia", "british columbia / yukon", "british columbia and yukon"):
+            for stop in range(index + 1, min(len(lines), index + 120)):
+                label = lines[stop].strip().lower()
+                if label in PROVINCES and "british columbia" not in label:
+                    return index, stop
+            return index, min(len(lines), index + 40)
+    return None
+
+
+REQUIRED_HEADINGS = (
+    "required courses", "required high school courses", "prerequisite courses", "prerequisites",
+    "course requirements", "program prerequisites", "required grade 12 courses",
+)
+
+
+def heading_section(lines, length=25):
+    """Index range of a 'Required Courses' style block (heading line plus the lines after it), else None."""
+    for index, line in enumerate(lines):
+        label = line.strip().strip(":").lower()
+        if label in REQUIRED_HEADINGS:
+            return index, min(len(lines), index + length)
+    return None
+
+
+def merge_windows(indexes, before, after, total):
+    blocks = []
+    for i in sorted(indexes):
+        low, high = max(0, i - before), min(total, i + after + 1)
+        if blocks and low <= blocks[-1][1]:
+            blocks[-1][1] = max(blocks[-1][1], high)
+        else:
+            blocks.append([low, high])
+    return blocks
+
+
+def ordered_excerpts(lines, terms, topic, maximum):
+    """Page order, nothing dropped inside a window: date tables ("January 15, 2027" | "Applications due") stay aligned."""
+    chosen = set()
+    for index, line in enumerate(lines):
+        if (len(line) >= 30 or re.search(r"\d", line)) and any(w in line.lower() for w in terms):
+            chosen.update(range(max(0, index - 3), min(len(lines), index + 10)))
+    result = "\n".join(lines[i] for i in sorted(chosen)) or "\n".join(lines)
     return result[:maximum], len(result) > maximum
+
+
+def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=()):
+    """Evidence first (BC section, then small windows around requirement lines), then other keyword context.
+
+    Lines that are only a link label (program menus) are left out unless they carry evidence themselves.
+    """
+    lines = text.splitlines()
+    if topic not in ("requirements", "language"):
+        return ordered_excerpts(lines, tuple(keywords) + TOPIC_TERMS.get(topic, ()), topic, maximum)
+    labels = {" ".join(label.split()).lower() for label in link_labels if label and label.strip()}
+    keep = [line for line in lines if line.lower() not in labels or has_evidence(line, topic)]
+    lines = keep
+    used = set()
+    parts = []
+    if topic == "requirements":
+        for section in (heading_section(lines), bc_section(lines)):
+            if section:
+                block = [i for i in range(*section) if i not in used]
+                if block:
+                    parts.append("\n".join(lines[i] for i in block))
+                    used.update(block)
+    span = 4 if topic == "language" else 1  # language scores often sit a line or two after the test name
+    evidence = [i for i in range(len(lines)) if i not in used and has_evidence("\n".join(lines[i:i + span]), topic)]
+    for low, high in merge_windows(evidence, 3, 8, len(lines)):
+        block = [i for i in range(low, high) if i not in used]
+        if block:
+            parts.append("\n".join(lines[i] for i in block))
+            used.update(block)
+    terms = tuple(keywords) + TOPIC_TERMS.get(topic, ())
+    context = [
+        i for i, line in enumerate(lines)
+        if i not in used and (len(line) >= 30 or re.search(r"\d", line)) and any(w in line.lower() for w in terms)
+    ]
+    for low, high in merge_windows(context, 2, 8, len(lines)):
+        block = [i for i in range(low, high) if i not in used]
+        if block:
+            parts.append("\n".join(lines[i] for i in block))
+            used.update(block)
+    result = "\n…\n".join(parts) or "\n".join(lines)
+    return result[:maximum], len(result) > maximum
+
+
+NO_EVIDENCE_INSTRUCTION = (
+    "官网正文里没有读到具体要求（课程、分数、日期），需人工核实。"
+    "Do not judge competitiveness (冲刺/匹配/保底/匹配偏上) or state requirements for this university/topic from general knowledge."
+)
+
+
+def html_text(fragment):
+    page = Page()
+    page.feed(fragment or "")
+    return clean_lines("".join(page.full))
+
+
+def ubc_post(fields):
+    """POST to UBC's fixed public requirements endpoint; nothing but these public form fields is sent."""
+    from urllib.parse import urlencode
+
+    parts = urlsplit(UBC_AJAX)
+    addresses = socket.getaddrinfo(parts.hostname, 443, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+        raise ValueError("Non-public destination blocked")
+    if not robots_allowed(UBC_AJAX):
+        raise PermissionError("robots.txt disallows automated reading")
+    opener = build_opener(ProxyHandler({}), HTTPSHandler(context=TLS))
+    request = Request(
+        UBC_AJAX,
+        data=urlencode(fields).encode(),
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Encoding": "identity"},
+    )
+    lock = host_lock(parts.hostname)
+    if not lock.acquire(timeout=30):
+        raise TimeoutError("Another read of this site is still running")
+    try:
+        with opener.open(request, timeout=PAGE_TIMEOUT) as response:
+            if urlsplit(response.url).hostname != parts.hostname:
+                raise ValueError("Unexpected redirect")
+            raw = response.read(LIMIT + 1)
+    finally:
+        lock.release()
+    if len(raw) > LIMIT:
+        raise ValueError("Response exceeds 6 MiB")
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    if not isinstance(data, dict) or not data.get("result"):
+        raise ValueError("UBC requirements service returned no result")
+    return data
+
+
+def ubc_requirements(program):
+    """BC applicant requirements (Vancouver) from the service behind UBC's requirements selector."""
+    base = {"type": "requirement_province", "location": UBC_BC_LOCATION, "campus": "vancouver", "theme": "page_requirements"}
+    listing = ubc_post({"action": "requirements_load_programs", **base})
+    parts = [("General requirements", listing.get("general")), ("English requirement", listing.get("english"))]
+    degree_name = UBC_DEGREES.get(program)
+    note = None
+    if degree_name:
+        programs = listing.get("programs") or {}
+        degree_id = next((k for k, v in programs.items() if str(v).strip().lower() == degree_name.lower()), None)
+        if degree_id is None:
+            note = f"Degree '{degree_name}' not listed by UBC's service; check manually."
+        else:
+            detail = ubc_post({"action": "requirements_load_program", "requirement": str(degree_id), **base})
+            parts.insert(0, (f"Degree: {degree_name}", detail.get("specific")))
+            if program == "computing":
+                note = "UBC has no separate computing degree for BC applicants; Computer Science is a Science major, so Science requirements are shown."
+    text = "\n".join(f"## {title}\n{html_text(body)}" for title, body in parts if body)
+    if readable_length(text) < 50:
+        raise ValueError("Insufficient readable content; manual verification required")
+    source = {
+        "url": UBC_PAGE,
+        "title": "UBC – Canadian high schools (British Columbia, Vancouver campus)" + (f" – {degree_name}" if degree_name else ""),
+        "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_year_mentions": sorted(set(re.findall(r"\b20\d{2}\b", text))),
+        "applicable_entry_year": None,
+        "requires_counsellor_verification": True,
+        "excerpt": text[:5000],
+        "excerpt_truncated": len(text) > 5000,
+        "specific_evidence_found": has_evidence(text, "requirements"),
+        "read_via": "UBC requirements service (same data as the you.ubc.ca selector)",
+    }
+    if note:
+        source["note"] = note
+    return source
 
 
 def collect(institution, topic, program, entry_year):
@@ -485,7 +757,8 @@ def collect(institution, topic, program, entry_year):
             "available_topics": list(SOURCES[institution]),
             "instruction": "官网未查到，需人工核实。No official page for this topic is configured; do not state numbers for it.",
         }
-    key = f"{institution}:{topic}:{program}"
+    # v5: results from older versions (nav-only excerpts, no evidence status) are not reused.
+    key = f"v5:{institution}:{topic}:{program}"
     hit = cached_result(key)
     if hit:
         result = dict(hit[1])
@@ -512,6 +785,15 @@ def collect(institution, topic, program, entry_year):
         ] + ([SCOPE_NOTES[institution]] if institution in SCOPE_NOTES else []),
     }
     pending = [SOURCES[institution][topic]]
+    if institution == "ubc" and topic == "requirements":
+        try:
+            result["sources"].append(ubc_requirements(program))
+            pending = []  # the static page has no requirement text; the service result replaces it
+        except Exception as error:
+            result["failures"].append({"url": UBC_AJAX, "reason": type(error).__name__, "status": "manual_verification_required"})
+    extra = PROGRAM_PAGES.get((institution, program))
+    if extra and topic == "requirements":
+        pending.append(extra)
     for index in range(3):
         if index >= len(pending):
             break
@@ -519,7 +801,7 @@ def collect(institution, topic, program, entry_year):
         try:
             page, final_url = fetch_page(url, institution)
             text = page.visible_text()
-            evidence, truncated = excerpts(text, PROGRAM_WORDS[program])
+            evidence, truncated = excerpts(text, PROGRAM_WORDS[program], topic, link_labels=[label for _, label in page.links])
             if len(text) < 100:
                 raise ValueError(
                     "Insufficient readable content; manual verification required"
@@ -560,18 +842,21 @@ def collect(institution, topic, program, entry_year):
                     "requires_counsellor_verification": True,
                     "excerpt": evidence,
                     "excerpt_truncated": truncated,
+                    "specific_evidence_found": has_evidence(evidence, topic),
                     "discovered_links": links[:15],
                     "unread_official_documents": documents[:10],
                 }
             )
-            if index == 0 and program != "general":
+            if index == 0 and program != "general" and institution not in NO_DISCOVERY:
+                # "science" also matches Computing Science / Engineering Science pages: skip links naming another direction.
+                # "science" itself is never an exclusion word: computing-science / engineering-science / social-sciences
+                # pages belong to those directions.
+                others = {w for name, words in PROGRAM_WORDS.items() if name != program for w in words} - set(PROGRAM_WORDS[program]) - {"science"}
                 ranked = [
                     link
                     for link in links
-                    if any(
-                        word in (link["title"] + " " + link["url"]).lower()
-                        for word in PROGRAM_WORDS[program]
-                    )
+                    if any(word in (label := (link["title"] + " " + link["url"]).lower()) for word in PROGRAM_WORDS[program])
+                    and not any(word in label for word in others)
                 ]
                 pending.extend(
                     link["url"] for link in ranked if link["url"] not in pending
@@ -589,7 +874,13 @@ def collect(institution, topic, program, entry_year):
     if not result["sources"]:
         result["status"] = "fetch_failed"
         result["instruction"] = "官网未查到，需人工核实。The official page could not be fetched now; do not state numbers."
-    elif not result["failures"]:
+        return result
+    if any(source["specific_evidence_found"] for source in result["sources"]):
+        result["status"] = "evidence_found"
+    else:
+        result["status"] = "no_requirement_text"
+        result["instruction"] = NO_EVIDENCE_INSTRUCTION
+    if not result["failures"]:
         # Only complete reads are reused; partial or failed reads are retried next time.
         store_result(key, result)
     return result
@@ -641,7 +932,7 @@ def collect_unofficial(institution, topic):
         try:
             page, final_url = fetch_page(url, "unofficial")
             text = page.visible_text()
-            evidence, truncated = excerpts(text, ())
+            evidence, truncated = excerpts(text, (), topic)
             result["sources"].append({
                 "url": final_url, "publisher": publisher, "source_type": "unofficial", "label": UNOFFICIAL_LABEL,
                 "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -679,7 +970,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read live official admissions evidence. Public IDs only; never student data.
+        """Read live official admissions evidence. Public IDs only; never student data. When the teacher names a program, pass that program on the first call (life sciences / health → science); do not query "general" first and then the program again. Query only the topics the teacher asked about.
 
         :param institution: University ID (ubc, sfu, utoronto, uwaterloo, mcmaster, mcgill, queens, western, ualberta, ucalgary, uottawa, yorku, tmu, hku, cuhk, hkust, nus, ntu); no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.
@@ -706,7 +997,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. Public IDs only; never student data.
+        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. When the teacher names a program, pass that program in this first call (life sciences / health → science) instead of "general" followed by per-university calls. Query only the topics the teacher asked about. Public IDs only; never student data.
 
         :param institutions: University IDs, e.g. ["ubc", "sfu", "uwaterloo"]; no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.

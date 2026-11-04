@@ -30,7 +30,7 @@
 - params：`function_calling: native`，`custom_params: {"reasoning_budget_tokens": 1024}`
 - capabilities：file_context **关闭**（成绩单改由 view_file 读取，追问时缓存才接得上）；web_search、code_interpreter、memory 关闭
 - builtinTools：只开 time、knowledge、skills、files
-- 工具：cseec_official_admissions（v0.4.0）；技能：admissions-source-check；过滤器：cseec_trim_tool_history
+- 工具：cseec_official_admissions（v0.5.0，2026-11-04；之前 v0.4.0）；技能：admissions-source-check；过滤器：cseec_trim_tool_history
 - 知识库：CSEEC · 总部政策与工作规范、升学官方资料 · Official Admissions Documents
 - 2026-10-29 在提示词末尾追加：
   ```
@@ -41,6 +41,7 @@
   4. 需要查两所或以上大学时，用 get_official_admissions_batch 一次查完，不要逐所调用 get_official_admissions。
   5. 调用工具之间不要写过程说明或计划（例如 "Let me…"、"我先…"），直接调用工具；全部查完后只输出一次正式回答。
   6. 老师上传了文件（如成绩单）时，第一轮就用 view_file 完整读一次，之后的追问不要重复读取。
+  7. 老师说了专业方向时，第一次调用官网工具就传对应的 program（生命科学 / 健康类 → science），不要先用 general 查一遍再按专业重查。（2026-11-04 追加）
 
   【语言规则】用户用中文提问就用中文回答；用户用英文提问就用英文回答。中文回答里遇到没有通用中文译名的英文专有名词（如大学名、课程名、考试名、项目名，例如 Dogwood、English Studies 12、AP Calculus BC），保留英文原文，并在第一次出现时在括号里附上近似的中文意思，例如：Dogwood（BC 省高中毕业证书）。解释和结论始终用用户的语言。
 
@@ -55,3 +56,12 @@
   6. 来源链接统一放在最后的 ## 官方来源 里。
   ```
 - 2026-10-29 23:49：提示词里旧的"按老师消息里的格式输出：总体情况、目标大学分析表……"已改成"按【回答格式】输出。"（与教师门户 PR JA-WEB-Update#13 同时上线）。
+- 2026-11-03：工具 cseec_official_admissions 之前没有给任何组授权，老师用升学分析时工具被悄悄跳过（只有管理员能用）。已给 CSEEC Teachers、JA Teachers 加读取授权（备份 webui.db.bak-20261104T010400Z-admtoolperm）。
+- 2026-11-04：【角色】里"直接说结论和判断（冲刺 / 匹配 / 保底）"后面加上"（必须符合【证据规则】）"，并在提示词末尾追加：
+  ```
+  【证据规则】
+  1. 只有当官网工具返回的正文（status 为 evidence_found）或知识库文件里，出现了该校**该专业**的录取分数或录取范围（例如往年录取平均分、竞争性平均分）时，才可以判断学生的竞争力或定位（冲刺 / 匹配 / 保底 / 匹配偏上等）。
+  2. 只读到基础条件或专业要求的课程（例如 English 12 最低 70%、至少 5 门 Grade 12 课、需要 Pre-Calculus 12 和 Chemistry 12）时，只能逐项说"课程 / 基础条件是否满足"，不能给出冲刺 / 匹配 / 保底定位，要写明"该专业录取分数未取到，竞争力需人工核实"。
+  3. 工具返回 no_requirement_text、fetch_failed、official_site_not_readable，或者没有查到这些内容时，第一行结论必须写明"官网要求未取到，暂时无法判断是否够格"，对比块里相应项目标 ❓ 缺资料，只列学生已有成绩和需要人工核实的项目。
+  4. 任何情况下都不得用常识、印象、往年经验或学校名气推测要求、分数线或录取把握。
+  ```
