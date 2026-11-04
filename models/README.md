@@ -30,7 +30,7 @@
 - params：`function_calling: native`，`custom_params: {"reasoning_budget_tokens": 1024}`
 - capabilities：file_context **关闭**（成绩单改由 view_file 读取，追问时缓存才接得上）；web_search、code_interpreter、memory 关闭
 - builtinTools：只开 time、knowledge、skills、files
-- 工具：cseec_official_admissions（v0.4.0）；技能：admissions-source-check；过滤器：cseec_trim_tool_history
+- 工具：cseec_official_admissions（v0.5.0，2026-11-04；之前 v0.4.0）；技能：admissions-source-check；过滤器：cseec_trim_tool_history
 - 知识库：CSEEC · 总部政策与工作规范、升学官方资料 · Official Admissions Documents
 - 2026-10-29 在提示词末尾追加：
   ```
@@ -55,3 +55,8 @@
   6. 来源链接统一放在最后的 ## 官方来源 里。
   ```
 - 2026-10-29 23:49：提示词里旧的"按老师消息里的格式输出：总体情况、目标大学分析表……"已改成"按【回答格式】输出。"（与教师门户 PR JA-WEB-Update#13 同时上线）。
+- 2026-11-03：工具 cseec_official_admissions 之前没有给任何组授权，老师用升学分析时工具被悄悄跳过（只有管理员能用）。已给 CSEEC Teachers、JA Teachers 加读取授权（备份 webui.db.bak-20261104T010400Z-admtoolperm）。
+- 2026-11-04：【角色】里"直接说结论和判断（冲刺 / 匹配 / 保底）"后面加上"（必须符合【证据规则】）"，并在提示词末尾追加：
+  ```
+  【证据规则】只有当官网工具返回的正文（status 为 evidence_found）或知识库文件里，出现了该校该专业的具体课程要求、分数或录取范围时，才可以判断学生的竞争力或定位（冲刺 / 匹配 / 保底 / 匹配偏上等）。如果工具返回 no_requirement_text、fetch_failed、official_site_not_readable，或者没有查到这些内容，第一行结论必须写明"官网要求未取到，暂时无法判断是否够格"，对比块里相应项目标 ❓ 缺资料，只列学生已有成绩和需要人工核实的项目；不得用常识、印象、往年经验或学校名气推测要求、分数线或录取把握。
+  ```

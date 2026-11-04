@@ -16,3 +16,12 @@
 - 不再返回"发现的链接"列表；未读 PDF 只列前 3 个。
 - 批量查询时"限制说明"只在顶层出现一次，不再每所大学重复；NUS 的范围说明改为 `scope_note`。
 模拟测试：3 所大学的返回从 36,481 字符降到 11,431 字符（约 -69%）。
+
+## v0.5.0 只取正文、说清楚有没有读到要求（2026-11-04）
+实测（2026-11-03）：UBC、SFU、UofT 返回给模型的摘录几乎全是网站导航菜单，真正的要求被 1500 字符上限截掉；状态永远是 `partial_evidence`，模型分不清"读到要求"和"只读到菜单"，仍给出"匹配偏上"这类结论。
+- 解析网页时跳过 `header`、`nav`、`footer`、`aside`（以及 role 为 navigation/banner/contentinfo/search 的区块），优先用 `main`/`article` 里的正文；正文太少时才退回整页。
+- 摘录关键词按主题（requirements / language / deadlines / history）分开，去掉 admission、grade、english、canadian 这类菜单里到处都有的宽泛词；不足 30 个字符且没有数字的短行（菜单项）不再触发摘录。含具体课程、分数、日期的段落排在最前面。
+- 返回上限 1500 → 2500 字符。
+- 新状态：`evidence_found`（正文里读到了具体课程 / 分数 / 日期）或 `no_requirement_text`（没读到，附 instruction：需人工核实，不得据常识判断冲刺/匹配/保底）。每个来源另有 `specific_evidence_found`。
+- UBC 的课程要求是网页脚本按校区/省份/学位再加载的，本工具读不到；新增 `scope_note` 提示人工在 you.ubc.ca 核实。没有去调 UBC 的内部接口。
+- 缓存键加了 `v5:` 前缀，旧版本的缓存结果不会被沿用。

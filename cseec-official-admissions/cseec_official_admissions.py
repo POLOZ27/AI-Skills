@@ -2,7 +2,7 @@
 title: CSEEC Official Admissions
 description: Read live public admissions evidence from allowlisted official university sites (Canada, Hong Kong, Singapore) without transmitting student data.
 author: CSEEC
-version: 0.4.0
+version: 0.5.0
 license: MIT
 """
 
@@ -29,7 +29,7 @@ from urllib.request import (
 )
 from urllib.robotparser import RobotFileParser
 
-USER_AGENT = "CSEEC-Admissions-Reader/0.3 (+https://www.cseec.ca)"
+USER_AGENT = "CSEEC-Admissions-Reader/0.5 (+https://www.cseec.ca)"
 # Also obey robots.txt rules aimed at user-triggered AI fetchers, since this tool is one.
 ROBOT_AGENTS = (USER_AGENT, "ChatGPT-User", "Claude-User", "Claude-Web")
 # Official Sectigo intermediate (from crt.sectigo.com) that admission.cuhk.edu.hk omits from its chain.
@@ -158,6 +158,7 @@ SOURCES = {
     },
 }
 SCOPE_NOTES = {
+    "ubc": "UBC course and grade requirements are loaded by a script after choosing campus, province and degree, so this reader cannot see them; check you.ubc.ca manually (choose British Columbia and the degree).",
     "nus": "Only NUS School of Computing pages are readable; university-wide international-qualification requirements and the IGP are on nus.edu.sg/oam and need manual checking.",
 }
 # Third-party pages (not the university's own site). Results are always labelled unofficial.
@@ -221,7 +222,7 @@ RESULT_TTL = 24 * 3600
 CACHE_DIR = "/app/backend/data/cache/cseec_admissions"
 BATCH_LIMIT = 6
 # Tool output is re-read by the model on every later round, so keep what it returns short.
-EXCERPT_RETURN_LIMIT = 1500
+EXCERPT_RETURN_LIMIT = 2500
 DOCUMENTS_RETURN_LIMIT = 3
 # One lock per host: different universities are read in parallel, one site is never hit concurrently.
 _HOST_LOCKS = {}
@@ -305,6 +306,20 @@ class CheckedRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+# Site chrome (menus, banners, footers) matches admissions keywords but holds no requirements.
+BOILERPLATE_TAGS = ("header", "nav", "footer", "aside")
+BOILERPLATE_ROLES = ("navigation", "banner", "contentinfo", "search")
+MAIN_TAGS = ("main", "article")
+
+
+def clean_lines(text):
+    return "\n".join(line for part in text.splitlines() if (line := " ".join(part.split())))
+
+
+def readable_length(text):
+    return len(re.sub(r"[\s|]", "", text))
+
+
 class Page(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -312,21 +327,47 @@ class Page(HTMLParser):
         self.in_title = False
         self.title = []
         self.text = []
+        self.full = []
+        self.main = []
         self.links = []
         self.anchor = None
+        self.chrome = None  # [tag, depth] while inside header/nav/footer/aside
+        self.main_scope = None  # [tag, depth] while inside main/article
+
+    def _track(self, scope, tag, opening):
+        if scope and scope[0] == tag:
+            scope[1] += 1 if opening else -1
+            if scope[1] <= 0:
+                return None
+        return scope
+
+    def _emit(self, value):
+        self.full.append(value)
+        if not self.chrome:
+            self.text.append(value)
+            if self.main_scope:
+                self.main.append(value)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag in ("script", "style", "noscript"):
             self.skip += 1
+        if self.chrome:
+            self.chrome = self._track(self.chrome, tag, True)
+        elif tag in BOILERPLATE_TAGS or (attrs.get("role") or "").lower() in BOILERPLATE_ROLES:
+            self.chrome = [tag, 1]
+        if self.main_scope:
+            self.main_scope = self._track(self.main_scope, tag, True)
+        elif tag in MAIN_TAGS or (attrs.get("role") or "").lower() == "main":
+            self.main_scope = [tag, 1]
         if tag == "title":
             self.in_title = True
         if tag == "a":
             self.anchor = [attrs.get("href") or "", ""]
         if tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
-            self.text.append("\n")
+            self._emit("\n")
         if tag in ("td", "th"):
-            self.text.append(" | ")
+            self._emit(" | ")
 
     def handle_endtag(self, tag):
         if tag in ("script", "style", "noscript") and self.skip:
@@ -337,7 +378,11 @@ class Page(HTMLParser):
             self.links.append(tuple(self.anchor))
             self.anchor = None
         if tag in ("p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
-            self.text.append("\n")
+            self._emit("\n")
+        if self.chrome:
+            self.chrome = self._track(self.chrome, tag, False)
+        if self.main_scope:
+            self.main_scope = self._track(self.main_scope, tag, False)
 
     def handle_data(self, data):
         if self.skip:
@@ -345,22 +390,23 @@ class Page(HTMLParser):
         if self.in_title:
             self.title.append(data)
         else:
-            self.text.append(data)
+            self._emit(data)
         if self.anchor is not None:
             self.anchor[1] += data
 
     def visible_text(self):
-        text = "\n".join(
-            line
-            for part in "".join(self.text).splitlines()
-            if (line := " ".join(part.split()))
-        )
-        if len(re.sub(r"[\s|]", "", text)) < 300 and getattr(self, "raw", ""):
+        """Prefer <main>/<article>, then the page without menus/footers, then everything."""
+        text = ""
+        for candidate in (self.main, self.text, self.full):
+            text = clean_lines("".join(candidate))
+            if readable_length(text) >= 300:
+                return text
+        if getattr(self, "raw", ""):
             # Malformed script/noscript nesting can leave the parser skipping the body; strip tags instead.
             raw = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1\s*>", " ", self.raw)
             raw = re.sub(r"(?i)<(br|/p|/div|/li|/tr|/h[1-6])\b[^>]*>", "\n", raw)
             raw = html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw))
-            text = "\n".join(line for part in raw.splitlines() if (line := " ".join(part.split())))
+            text = clean_lines(raw)
         return text
 
 
@@ -428,33 +474,73 @@ def read_page(url, institution):
         return parser, response.url
 
 
-def excerpts(text, keywords, maximum=5000):
-    """Keep source order and headings; output is an excerpt, never a full-coverage claim."""
+TOPIC_TERMS = {
+    "requirements": (
+        "minimum", "required", "requirement", "prerequisite", "average", "grade 12", "grade 11",
+        "english 12", "english studies", "pre-calculus", "calculus", "chemistry", "physics",
+        "biology", "british columbia", "advanced placement", "dogwood", "competitive", "%",
+    ),
+    "language": ("ielts", "toefl", "duolingo", "pte", "cael", "english 12", "english studies", "minimum", "score"),
+    "deadlines": ("deadline", "apply by", "application", "document", "decision", "january", "february",
+                  "march", "april", "may", "november", "december", "october"),
+    "history": ("average", "range", "%", "admitted", "enrolment", "enrollment", "report", "past three"),
+}
+MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+# Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
+EVIDENCE_PATTERNS = {
+    "requirements": (
+        r"\b(?:english|math\w*|pre-?calculus|calculus|chemistry|physics|biology|science|social studies|language|literature)[a-z0-9 ,&/\-]{0,40}\b1[12]\b",
+        r"\b\d{2}(?:\.\d)?\s?%",
+        r"\bminimum\b[^.\n]{0,60}\d",
+    ),
+    "language": (
+        r"\b(?:ielts|toefl|duolingo|pte|cael)\b[^\n]{0,60}\d",
+        r"\benglish(?: studies)?(?: first peoples)? 12\b[^\n]{0,60}\d",
+    ),
+    "deadlines": (
+        MONTHS + r"\s+\d{1,2}\b",
+        r"\b\d{1,2}\s+" + MONTHS,
+        r"\b20\d{2}-\d{2}-\d{2}\b",
+    ),
+    "history": (r"\b\d{2}(?:\.\d)?\s?%", r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
+}
+
+
+def has_evidence(text, topic):
+    lowered = text.lower()
+    return any(re.search(pattern, lowered) for pattern in EVIDENCE_PATTERNS.get(topic, ()))
+
+
+def excerpts(text, keywords, topic="requirements", maximum=5000):
+    """Keep source order; only lines that look like content (not short menu labels) start an excerpt."""
     lines = text.splitlines()
     chosen = set()
-    terms = tuple(keywords) + (
-        "admission",
-        "requirement",
-        "deadline",
-        "minimum",
-        "past three",
-        "guarantee",
-        "enrolment",
-        "enrollment",
-        "grade",
-        "report",
-        "202",
-        "british columbia",
-        "canadian",
-        "advanced placement",
-        "average",
-        "english",
-    )
+    terms = tuple(keywords) + TOPIC_TERMS.get(topic, ())
     for index, line in enumerate(lines):
-        if any(word in line.lower() for word in terms):
+        lowered = line.lower()
+        if len(line) < 30 and not re.search(r"\d", line):
+            continue
+        if any(word in lowered for word in terms):
             chosen.update(range(max(0, index - 2), min(len(lines), index + 9)))
-    result = "\n".join(lines[i] for i in sorted(chosen)) or text
+    # Matched lines that carry real evidence go first so the return limit does not cut them off.
+    blocks, current = [], []
+    for i in sorted(chosen):
+        if current and i != current[-1] + 1:
+            blocks.append(current)
+            current = []
+        current.append(i)
+    if current:
+        blocks.append(current)
+    texts = ["\n".join(lines[i] for i in block) for block in blocks]
+    ranked = [t for t in texts if has_evidence(t, topic)] + [t for t in texts if not has_evidence(t, topic)]
+    result = "\n…\n".join(ranked) or text
     return result[:maximum], len(result) > maximum
+
+
+NO_EVIDENCE_INSTRUCTION = (
+    "官网正文里没有读到具体要求（课程、分数、日期），需人工核实。"
+    "Do not judge competitiveness (冲刺/匹配/保底/匹配偏上) or state requirements for this university/topic from general knowledge."
+)
 
 
 def collect(institution, topic, program, entry_year):
@@ -485,7 +571,8 @@ def collect(institution, topic, program, entry_year):
             "available_topics": list(SOURCES[institution]),
             "instruction": "官网未查到，需人工核实。No official page for this topic is configured; do not state numbers for it.",
         }
-    key = f"{institution}:{topic}:{program}"
+    # v5: results from older versions (nav-only excerpts, no evidence status) are not reused.
+    key = f"v5:{institution}:{topic}:{program}"
     hit = cached_result(key)
     if hit:
         result = dict(hit[1])
@@ -519,7 +606,7 @@ def collect(institution, topic, program, entry_year):
         try:
             page, final_url = fetch_page(url, institution)
             text = page.visible_text()
-            evidence, truncated = excerpts(text, PROGRAM_WORDS[program])
+            evidence, truncated = excerpts(text, PROGRAM_WORDS[program], topic)
             if len(text) < 100:
                 raise ValueError(
                     "Insufficient readable content; manual verification required"
@@ -560,6 +647,7 @@ def collect(institution, topic, program, entry_year):
                     "requires_counsellor_verification": True,
                     "excerpt": evidence,
                     "excerpt_truncated": truncated,
+                    "specific_evidence_found": has_evidence(evidence, topic),
                     "discovered_links": links[:15],
                     "unread_official_documents": documents[:10],
                 }
@@ -589,7 +677,13 @@ def collect(institution, topic, program, entry_year):
     if not result["sources"]:
         result["status"] = "fetch_failed"
         result["instruction"] = "官网未查到，需人工核实。The official page could not be fetched now; do not state numbers."
-    elif not result["failures"]:
+        return result
+    if any(source["specific_evidence_found"] for source in result["sources"]):
+        result["status"] = "evidence_found"
+    else:
+        result["status"] = "no_requirement_text"
+        result["instruction"] = NO_EVIDENCE_INSTRUCTION
+    if not result["failures"]:
         # Only complete reads are reused; partial or failed reads are retried next time.
         store_result(key, result)
     return result
@@ -641,7 +735,7 @@ def collect_unofficial(institution, topic):
         try:
             page, final_url = fetch_page(url, "unofficial")
             text = page.visible_text()
-            evidence, truncated = excerpts(text, ())
+            evidence, truncated = excerpts(text, (), topic)
             result["sources"].append({
                 "url": final_url, "publisher": publisher, "source_type": "unofficial", "label": UNOFFICIAL_LABEL,
                 "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
