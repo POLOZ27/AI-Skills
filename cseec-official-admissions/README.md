@@ -30,3 +30,8 @@
   - SFU：program=science 时直接读理学院页面（`bc-yukon/science.html`）；挑专业链接时跳过写着其他方向的链接（例如 Computing Science、Engineering Science）。
   - "50% complete" 这类完成进度不再算作分数要求。
   - 离线测试：`python3 cseec-official-admissions/test_offline.py`。
+- 2026-11-04 第三轮（实测 SFU 理学院、UofT 生命科学后）：
+  - 摘录顺序：先放 "British Columbia" 省份段落（列出各省要求的页面），再放每条具体要求附近的小段，最后才是其他关键词上下文；纯链接文字的行（专业菜单）去掉。SFU 理学院的 Required Courses 原来在第 4439 字符、被 2500 上限截掉，现在排在最前。
+  - 百分比必须挨着 average / grade / minimum / admission 等词才算分数要求（UofT 页面的 "95% of the universe" 曾被误判）。
+  - UofT：要求页改为 `requirements-canadian-high-schools`（含 BC 课程对照），不再跟进学科介绍页；`scope_note` 说明专业先修和录取分数需人工核实。
+  - 工具说明里写明：老师说了专业时，第一次调用就传对应 program（生命科学 / 健康 → science），不要先查 general 再按专业重查。

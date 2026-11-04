@@ -90,7 +90,7 @@ SOURCES = {
     },
     # Canadian universities: requirement pages for Canadian / BC (Dogwood) applicants where the school has one.
     "utoronto": {
-        "requirements": "https://future.utoronto.ca/requirements-canadian-students",
+        "requirements": "https://future.utoronto.ca/requirements-canadian-high-schools",
         "language": "https://future.utoronto.ca/english-language-requirements",
         "deadlines": "https://future.utoronto.ca/deadlines",
     },
@@ -158,6 +158,7 @@ SOURCES = {
     },
 }
 SCOPE_NOTES = {
+    "utoronto": "UofT pages give the BC course equivalents for all programs; program prerequisites and admission averages are on each program page and need manual checking.",
     "ubc": "UBC requirements come from UBC's own requirements service for BC applicants, Vancouver campus (the same data the you.ubc.ca selector shows). Okanagan campus and non-BC curricula need manual checking.",
     "nus": "Only NUS School of Computing pages are readable; university-wide international-qualification requirements and the IGP are on nus.edu.sg/oam and need manual checking.",
 }
@@ -217,6 +218,8 @@ PROGRAM_WORDS = {
 PROGRAM_PAGES = {
     ("sfu", "science"): "https://www.sfu.ca/students/admission/admission-requirements/canadian-highschool/bc-yukon/science.html",
 }
+# Program links on these sites lead to subject overview pages, not requirements; do not follow them.
+NO_DISCOVERY = {"utoronto"}
 # UBC loads requirements with a script from this public endpoint (robots.txt allows it).
 UBC_AJAX = "https://you.ubc.ca/wp-admin/admin-ajax.php"
 UBC_PAGE = "https://you.ubc.ca/applying-ubc/requirements/canadian-high-schools/"
@@ -500,12 +503,17 @@ TOPIC_TERMS = {
                   "march", "april", "may", "november", "december", "october"),
     "history": ("average", "range", "%", "admitted", "enrolment", "enrollment", "report", "past three"),
 }
+# A percentage only counts next to admission words ("95% of the universe", "50% complete" do not).
+PERCENT = (
+    r"\b(?:average|grade|minimum|admission|admitted|mark|at least|required|competitive|range)s?\b[^.\n]{0,40}\b\d{2}(?:\.\d)?\s?%"
+    r"|\b\d{2}(?:\.\d)?\s?%(?!\s*complete)[^.\n]{0,30}(?:average|minimum|or higher|or above|in (?:english|grade|all))"
+)
 MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 # Text that is an actual requirement, score or date — not just a menu label that says "Requirements".
 EVIDENCE_PATTERNS = {
     "requirements": (
         r"\b(?:english|math\w*|pre-?calculus|calculus|chemistry|physics|biology|science|social studies|language|literature)[a-z0-9 ,&/\-]{0,40}\b1[12]\b",
-        r"\b\d{2}(?:\.\d)?\s?%(?!\s*complete)",
+        PERCENT,
         r"\bminimum\b[^.\n]{0,60}\d",
     ),
     "language": (
@@ -517,7 +525,7 @@ EVIDENCE_PATTERNS = {
         r"\b\d{1,2}\s+" + MONTHS,
         r"\b20\d{2}-\d{2}-\d{2}\b",
     ),
-    "history": (r"\b\d{2}(?:\.\d)?\s?%(?!\s*complete)", r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
+    "history": (PERCENT, r"\b\d{2}(?:\.\d)?\s?(?:-|–|to)\s?\d{2}(?:\.\d)?\b"),
 }
 
 
@@ -526,29 +534,69 @@ def has_evidence(text, topic):
     return any(re.search(pattern, lowered) for pattern in EVIDENCE_PATTERNS.get(topic, ()))
 
 
-def excerpts(text, keywords, topic="requirements", maximum=5000):
-    """Keep source order; only lines that look like content (not short menu labels) start an excerpt."""
-    lines = text.splitlines()
-    chosen = set()
-    terms = tuple(keywords) + TOPIC_TERMS.get(topic, ())
+PROVINCES = (
+    "alberta", "british columbia", "manitoba", "new brunswick", "newfoundland and labrador", "newfoundland",
+    "northwest territories", "nova scotia", "nunavut", "ontario", "prince edward island", "quebec", "québec",
+    "saskatchewan", "yukon",
+)
+
+
+def bc_section(lines):
+    """Index range of a 'British Columbia' section on pages that list every province, else None."""
     for index, line in enumerate(lines):
-        lowered = line.lower()
-        if len(line) < 30 and not re.search(r"\d", line):
-            continue
-        if any(word in lowered for word in terms):
-            chosen.update(range(max(0, index - 2), min(len(lines), index + 9)))
-    # Matched lines that carry real evidence go first so the return limit does not cut them off.
-    blocks, current = [], []
-    for i in sorted(chosen):
-        if current and i != current[-1] + 1:
-            blocks.append(current)
-            current = []
-        current.append(i)
-    if current:
-        blocks.append(current)
-    texts = ["\n".join(lines[i] for i in block) for block in blocks]
-    ranked = [t for t in texts if has_evidence(t, topic)] + [t for t in texts if not has_evidence(t, topic)]
-    result = "\n…\n".join(ranked) or text
+        if line.strip().lower() in ("british columbia", "british columbia / yukon", "british columbia and yukon"):
+            for stop in range(index + 1, min(len(lines), index + 120)):
+                label = lines[stop].strip().lower()
+                if label in PROVINCES and "british columbia" not in label:
+                    return index, stop
+            return index, min(len(lines), index + 40)
+    return None
+
+
+def merge_windows(indexes, before, after, total):
+    blocks = []
+    for i in sorted(indexes):
+        low, high = max(0, i - before), min(total, i + after + 1)
+        if blocks and low <= blocks[-1][1]:
+            blocks[-1][1] = max(blocks[-1][1], high)
+        else:
+            blocks.append([low, high])
+    return blocks
+
+
+def excerpts(text, keywords, topic="requirements", maximum=5000, link_labels=()):
+    """Evidence first (BC section, then small windows around requirement lines), then other keyword context.
+
+    Lines that are only a link label (program menus) are left out unless they carry evidence themselves.
+    """
+    lines = text.splitlines()
+    labels = {" ".join(label.split()).lower() for label in link_labels if label and label.strip()}
+    keep = [line for line in lines if line.lower() not in labels or has_evidence(line, topic)]
+    lines = keep
+    used = set()
+    parts = []
+    if topic == "requirements":
+        section = bc_section(lines)
+        if section:
+            parts.append("\n".join(lines[section[0]:section[1]]))
+            used.update(range(*section))
+    evidence = [i for i, line in enumerate(lines) if i not in used and has_evidence(line, topic)]
+    for low, high in merge_windows(evidence, 3, 8, len(lines)):
+        block = [i for i in range(low, high) if i not in used]
+        if block:
+            parts.append("\n".join(lines[i] for i in block))
+            used.update(block)
+    terms = tuple(keywords) + TOPIC_TERMS.get(topic, ())
+    context = [
+        i for i, line in enumerate(lines)
+        if i not in used and (len(line) >= 30 or re.search(r"\d", line)) and any(w in line.lower() for w in terms)
+    ]
+    for low, high in merge_windows(context, 2, 8, len(lines)):
+        block = [i for i in range(low, high) if i not in used]
+        if block:
+            parts.append("\n".join(lines[i] for i in block))
+            used.update(block)
+    result = "\n…\n".join(parts) or "\n".join(lines)
     return result[:maximum], len(result) > maximum
 
 
@@ -707,7 +755,7 @@ def collect(institution, topic, program, entry_year):
         try:
             page, final_url = fetch_page(url, institution)
             text = page.visible_text()
-            evidence, truncated = excerpts(text, PROGRAM_WORDS[program], topic)
+            evidence, truncated = excerpts(text, PROGRAM_WORDS[program], topic, link_labels=[label for _, label in page.links])
             if len(text) < 100:
                 raise ValueError(
                     "Insufficient readable content; manual verification required"
@@ -753,7 +801,7 @@ def collect(institution, topic, program, entry_year):
                     "unread_official_documents": documents[:10],
                 }
             )
-            if index == 0 and program != "general":
+            if index == 0 and program != "general" and institution not in NO_DISCOVERY:
                 # "science" also matches Computing Science / Engineering Science pages: skip links naming another direction.
                 # "science" itself is never an exclusion word: computing-science / engineering-science / social-sciences
                 # pages belong to those directions.
@@ -876,7 +924,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read live official admissions evidence. Public IDs only; never student data.
+        """Read live official admissions evidence. Public IDs only; never student data. When the teacher names a program, pass that program on the first call (life sciences / health → science); do not query "general" first and then the program again.
 
         :param institution: University ID (ubc, sfu, utoronto, uwaterloo, mcmaster, mcgill, queens, western, ualberta, ucalgary, uottawa, yorku, tmu, hku, cuhk, hkust, nus, ntu); no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.
@@ -903,7 +951,7 @@ class Tools:
         ],
         entry_year: int,
     ) -> str:
-        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. Public IDs only; never student data.
+        """Read official admissions evidence for several universities at once (up to 6), in parallel. Prefer this over repeated single calls when comparing universities. When the teacher names a program, pass that program in this first call (life sciences / health → science) instead of "general" followed by per-university calls. Public IDs only; never student data.
 
         :param institutions: University IDs, e.g. ["ubc", "sfu", "uwaterloo"]; no URLs or student details.
         :param topic: Evidence type; use history for past admissions data.

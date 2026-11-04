@@ -82,4 +82,23 @@ assert "engineering-science.html" in picked("engineering"), picked("engineering"
 assert "arts-and-social-sciences.html" in picked("arts"), picked("arts")
 sci = picked("science")
 assert "science.html" in sci and not {"computing-science.html", "engineering-science.html", "arts-and-social-sciences.html"} & set(sci), sci
+# 10 percentages need admission context
+assert not adm.has_evidence("they form 95% of the universe", "requirements")
+assert adm.has_evidence("a minimum grade of 70% in English 12", "requirements")
+assert adm.has_evidence("Admission averages: 88% to 93%", "history")
+# 11 SFU-like: program menu + long general text, real requirements at the end must reach the model
+menu = "".join(f"<li><a href='/students/admission/p{i}.html'>Program name number {i} in the faculty list</a></li>" for i in range(40))
+general = "<p>Admission to SFU is competitive and the requirement varies; early admission is offered to applicants who apply by the deadline and send documents.</p>" * 25
+req = "<h3>Required Courses</h3><p>Grade 11</p><p>Two of:</p><p>Chemistry 11</p><p>Physics 11</p><p>Grade 12 (at least 5 approved academic courses)</p><p>At least two of:</p><p>Calculus 12</p><p>Chemistry 12</p><p>All:</p><p>Pre-Calculus 12</p>"
+sfu_html = f"<html><body><main><ul>{menu}</ul>{general}{req}</main></body></html>"
+p = adm.Page(); p.raw = sfu_html; p.feed(sfu_html)
+ex, _ = adm.excerpts(p.visible_text(), ("science",), "requirements", link_labels=[l for _, l in p.links])
+head = ex[:2500]
+assert "Pre-Calculus 12" in head and "Required Courses" in head and "Program name number 3" not in ex, head[:600]
+# 12 UofT-like: provinces list, BC section goes first
+prov = "".join(f"<h3>{n}</h3>" + f"<p>{n} secondary school diploma with six Grade 12 courses including English, with long explanatory text for applicants.</p>" * 6 for n in ("Alberta", "Ontario"))
+uoft_html = f"<html><body><main>{prov}<h3>British Columbia</h3><p>High School Diploma with six Grade 12 academic subjects, including English.</p><p>English (ENG4U / EAE4U): English Studies 12</p><p>Advanced Functions (MHF4U): Pre-Calculus 12</p><h3>Manitoba</h3><p>Manitoba Grade 12 diploma text.</p></main></body></html>"
+p = adm.Page(); p.raw = uoft_html; p.feed(uoft_html)
+ex, _ = adm.excerpts(p.visible_text(), ("science",), "requirements")
+assert ex.startswith("British Columbia") and "Manitoba" not in ex.split("…")[0], ex[:300]
 print("all ok 2")
