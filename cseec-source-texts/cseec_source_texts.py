@@ -2,7 +2,7 @@
 title: CSEEC Source Texts
 description: Look up the original wording of public-domain texts (Library of Congress Aesop fables, Project Gutenberg books) from the school's local library, reading the official site only when the library does not have it yet.
 author: CSEEC
-version: 0.1.0
+version: 0.2.1
 license: MIT
 """
 
@@ -20,6 +20,7 @@ import sqlite3
 import ssl
 import threading
 import time
+import unicodedata
 from typing import Literal
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -62,6 +63,7 @@ AESOP_INDEX_TTL = 30 * 24 * 3600
 # Tool output is re-read by the model on every later round; return long texts in parts.
 PART_CHARS = 12000
 MATCH_LIMIT = 5
+NORM_VERSION = "2"
 _ROBOTS = {}
 _HOST_LOCKS = {}
 _HOST_LOCKS_GUARD = threading.Lock()
@@ -80,6 +82,7 @@ def now_iso():
 def normalize(text):
     """Lower-case, '&' as 'and', no punctuation or accents that differ between editions."""
     text = html.unescape(text or "").lower().replace("&", " and ")
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
     text = re.sub(r"[’'`]", "", text)
     return " ".join(re.sub(r"[^\w]+", " ", text).split())
 
@@ -96,6 +99,16 @@ def connect():
         " author TEXT, url TEXT, fetched_at TEXT, body TEXT)"
     )
     db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    row = db.execute("SELECT value FROM meta WHERE key='norm_version'").fetchone()
+    if not row or row[0] != NORM_VERSION:
+        # normalize() changed (accents are now stripped): recompute stored search keys once.
+        with _DB_LOCK, db:
+            for text_id, source, title, author in db.execute(
+                "SELECT id, source, title, author FROM catalog"
+            ).fetchall():
+                key = title if source == "loc_aesop" else title + " " + author
+                db.execute("UPDATE catalog SET norm=? WHERE id=?", (normalize(key), text_id))
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('norm_version', ?)", (NORM_VERSION,))
     return db
 
 
@@ -321,14 +334,30 @@ def search_catalog(db, title, author, source):
         list(sources) + params,
     ).fetchall()
     wanted = " ".join(words)
+    stored = {
+        r[0] for r in db.execute(
+            f"SELECT id FROM texts WHERE id IN ({','.join('?' * len(rows))})", [r[0] for r in rows]
+        )
+    } if rows else set()
 
     def rank(row):
         name = normalize(row[2])
+        partial = bool(re.search(r"\b(part|volume|vol|book|chapter)\s+\w+", name)) and not re.search(
+            r"\b(part|volume|vol|book|chapter)\b", wanted
+        )
+        number = int(row[0].partition(":")[2]) if row[1] == "gutenberg" else 0
+        # Adaptations list the original author second; the teacher's author should be the first one.
+        first_author = normalize((row[3] or "").split(";")[0])
         return (
+            bool(author_words) and not all(w in first_author for w in author_words),
+            # Books already in the library were chosen and checked by hand.
+            row[0] not in stored,
             name != wanted,
             not name.startswith(wanted),
+            partial,
             row[1] != "loc_aesop",
             row[4] not in ("en", ""),
+            number,
             len(name),
         )
 
@@ -504,6 +533,34 @@ def seed(aesop=True, gutenberg_catalog=True, delay=1.0):
             report["loc_aesop"] = {"fables": len(ids), "stored": stored, "failed": failed}
         if gutenberg_catalog:
             report["gutenberg_catalog_titles"] = load_gutenberg_catalog(db)
+    finally:
+        db.close()
+    return report
+
+
+def prefetch_list(path, delay=2.0):
+    """Download each "title | author" line from Project Gutenberg into the library once."""
+    db = connect()
+    report = {"stored": [], "already": [], "not_found": [], "failed": []}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = [l.strip() for l in handle if l.strip() and not l.startswith("#")]
+        for line in lines:
+            title, _, author = (part.strip() for part in line.partition("|"))
+            matches = [row for row in search_catalog(db, title, author, "gutenberg") if row[4] in ("en", "")]
+            if not matches:
+                report["not_found"].append(line)
+                continue
+            text_id = matches[0][0]
+            if stored_text(db, text_id):
+                report["already"].append(text_id)
+                continue
+            try:
+                get_text(db, text_id)
+                report["stored"].append(f"{text_id} {matches[0][2]}")
+            except Exception as error:
+                report["failed"].append(f"{text_id} {type(error).__name__}")
+            time.sleep(delay)
     finally:
         db.close()
     return report
